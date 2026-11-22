@@ -1,0 +1,83 @@
+@import 'tailwindcss';
+@import 'maplibre-gl/dist/maplibre-gl.css';
+@import 'uplot/dist/uPlot.min.css';
+
+/*
+ * TrailLog design tokens — light & outdoorsy.
+ * paper  #F6F7F2  page background (lichen-tinted off-white)
+ * forest #1F5C3F  primary actions, links, chart
+ * trail  #F07C1E  accent: the route itself, like painted trail blazes
+ * ink    #16241D  main text      moss #56655C secondary text (≥ 5:1 on paper)
+ * lichen #E4ECDF  tinted surfaces, chips
+ */
+@theme {
+  --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+  --color-paper: #f6f7f2;
+  --color-card: #ffffff;
+  --color-lichen: #e4ecdf;
+  --color-line: #dfe5da;
+  --color-ink: #16241d;
+  --color-moss: #56655c;
+  --color-forest: #1f5c3f;
+  --color-forest-dark: #174831;
+  --color-trail: #f07c1e;
+  --color-trail-dark: #a34d07; /* text-safe orange: ≥ 5:1 on white, paper and orange chips */
+  --color-danger: #b42318;
+  --shadow-soft: 0 1px 2px rgb(22 36 29 / 0.06), 0 8px 24px -6px rgb(22 36 29 / 0.12);
+  --shadow-lift: 0 2px 4px rgb(22 36 29 / 0.06), 0 16px 36px -10px rgb(22 36 29 / 0.22);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Visible keyboard focus everywhere (mouse clicks don't show it). */
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--color-forest) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.contours-hero {
+  background-image: url('./assets/contours-hero.svg');
+  background-size: cover;
+  background-position: center;
+}
+.contours-card {
+  background-image: url('./assets/contours-card.svg');
+  background-size: cover;
+  background-position: center;
+}
+
+/* Frosted panel over the map */
+.map-panel {
+  background: rgb(255 255 255 / 0.86);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  border: 1px solid rgb(255 255 255 / 0.7);
+  box-shadow: var(--shadow-soft);
+}
+
+.uplot .u-cursor-x {
+  border-right: 1px dashed var(--color-trail);
+}
+.uplot .u-legend {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

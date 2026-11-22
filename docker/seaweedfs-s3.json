@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "traillog-dev",
+      "credentials": [{ "accessKey": "traillog", "secretKey": "traillog-dev-secret" }],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}
