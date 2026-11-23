@@ -18,7 +18,9 @@ camera fly along the route as your photos and stops pop up.
   - elevation gain/loss with median filter + 5 m hysteresis (raw gain kept for comparison)
   - moving time vs. total time, moving pace, max altitude, timezone of the start point
   - Douglas–Peucker simplification in PostGIS (in metres, via Web Mercator)
-- 3D map (MapLibre + open AWS terrain tiles), satellite / topo / dark styles
+- 3D map (MapLibre + open AWS terrain tiles) with four keyless styles (ADR-36): Terrain (land
+  tinted by height with multi-direction hill shading), Satellite (Sentinel-2 cloudless by EOX),
+  Topo and Dark
 - Elevation chart (uPlot) synced both ways with the map
 - Map-first trip page: a full-width 3D map with the title and headline numbers laid over it,
   photos in route order along its bottom edge, and the elevation chart in a band below (ADR-31)

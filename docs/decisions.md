@@ -238,3 +238,21 @@ A short log of key choices: what was decided, what else was considered, and the 
   - Thumbnails need the bucket's CORS rule for GET, already set by `ensure_bucket`.
   - Lifetime totals come from a small `GET /api/trips/totals` endpoint, so they stay right beyond the first page of trips.
 
+## ADR-36: A tinted terrain style and keyless satellite
+- **Decision:** the default map style is now "Terrain":
+  - OpenFreeMap's quiet Positron base.
+  - A MapLibre `color-relief` layer tinting the land by height: green valleys, tan slopes, grey-brown rock, then snow.
+  - A `multidirectional` hillshade lit from four directions.
+
+  Both layers use the elevation tiles we already load, and both sit under water, roads and labels instead of on top of everything. "Satellite" no longer needs a key: it uses EOX's Sentinel-2 cloudless 2024 mosaic as an inline style, credited as required. A MapTiler key still swaps in MapTiler's sharper hybrid and outdoor styles. The "Light" style is replaced by Terrain. Every style gets the new shading, and terrain exaggeration goes from 1.3 to 1.4. Tuned by eye on the demo trek: an earthier ramp (a paler one washed everything above 3,000 m out to white), warm brown shadows, Positron's flat-white glacier fill made semi-transparent on Terrain so snowfields read as snow over relief, and photo clustering tightened (22 px radius, none above zoom 13) so photos show as thumbnails at normal zoom. Map and chart colours stay in `lib/palette.ts`; the height ramp is in `lib/mapStyles.ts`, with a test that its stops ascend.
+- **Alternatives:**
+  - MapTiler's outdoor and satellite styles (needs a key; the free plan is non-commercial and capped at about 5K sessions a month).
+  - Esri World Imagery (sharper, but its terms are unclear without an ArcGIS account and key).
+  - Stadia/Stamen terrain (needs an account in production).
+  - Keeping a single north-west hillshade.
+- **Why:** height tinting is what makes printed and outdoor maps read as terrain at a glance. Lighting from several directions keeps slopes that face the light from going flat. Neither needs a service or a key, so the look is the same for every visitor and in every deploy. A satellite view was the most-requested style in comparable products. Sentinel-2 is cloud-free, global and free for a non-commercial portfolio.
+- **Tradeoff:**
+  - Sentinel-2 is 10 m imagery: excellent for valleys and mountains at overview zoom, soft when zoomed into a town. The replay's follow camera stays around zoom 12–15, where it holds up.
+  - A commercial deployment needs an EOX licence or a MapTiler key (set `VITE_MAPTILER_KEY`).
+  - Positron's own land fills are pale, so the tint shows through; on Topo and Dark only the shading changes.
+

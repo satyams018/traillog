@@ -37,11 +37,13 @@ import {
 import { bearingDeg, cameraBearingForRoute } from '../lib/geo'
 import {
   type BaseStyleId,
+  RELIEF_RAMP,
+  hasRelief,
   isDarkStyle,
   MAP_PITCH,
   TERRAIN_EXAGGERATION,
   TERRAIN_SOURCE,
-  styleUrl,
+  styleFor,
 } from '../lib/mapStyles'
 import { nearestProfileIndex } from '../lib/profile'
 import type { Photo, TrackData } from '../lib/types'
@@ -208,7 +210,7 @@ export default function TripMap({
     const [minX, minY, maxX, maxY] = track.bbox
     const map = new MLMap({
       container: containerRef.current,
-      style: styleUrl(styleId),
+      style: styleFor(styleId),
       center: [(minX + maxX) / 2, (minY + maxY) / 2],
       zoom: 10,
       maxPitch: 80,
@@ -241,7 +243,7 @@ export default function TripMap({
 
     // setStyle() wipes custom sources, so overlays are (re)added on every style load.
     map.on('style.load', () => {
-      addOverlays(map, latest.current.track, isDarkStyle(latest.current.styleId))
+      addOverlays(map, latest.current.track, latest.current.styleId)
       ;(map.getSource('photos') as GeoJSONSource).setData(photoFeatures(latest.current.photos))
       ;(map.getSource('stops') as GeoJSONSource).setData(stopFeatures(latest.current.stops))
       addPhotoThumbs(map, latest.current.photos, thumbCache.current)
@@ -360,7 +362,7 @@ export default function TripMap({
     appliedStyle.current = styleId
     setLoading(true)
     // diff:false forces a full reload so 'style.load' fires and overlays are re-added.
-    map.setStyle(styleUrl(styleId), { diff: false })
+    map.setStyle(styleFor(styleId), { diff: false })
     map.once('style.load', () => setLoading(false))
   }, [styleId])
 
@@ -758,32 +760,70 @@ function fitRouteToView(
   }
 }
 
+/**
+ * Relief shading lit from four directions (MapLibre's multidirectional method): ridges and
+ * valleys read clearly whichever way they face, unlike a single north-west light that
+ * flattens slopes facing it. Dark bases get light highlights, light bases soft navy shadows.
+ */
 function hillshadePaint(dark: boolean) {
-  // Dark bases need light highlights to show relief; light bases need soft shadows.
-  return dark
-    ? {
-        'hillshade-exaggeration': 0.45,
-        'hillshade-shadow-color': '#000000',
-        'hillshade-highlight-color': 'rgba(244,239,230,0.35)',
-        'hillshade-accent-color': '#000000',
-      }
-    : {
-        'hillshade-exaggeration': 0.2,
-        'hillshade-shadow-color': '#0b1210',
-        'hillshade-highlight-color': 'rgba(255,255,255,0)',
-      }
+  const four = <T,>(v: T) => [v, v, v, v]
+  return {
+    'hillshade-method': 'multidirectional' as const,
+    'hillshade-illumination-direction': [270, 315, 0, 45],
+    'hillshade-illumination-altitude': [35, 35, 35, 35],
+    'hillshade-exaggeration': dark ? 0.5 : 0.7,
+    'hillshade-highlight-color': four(dark ? 'rgba(255,248,235,0.22)' : 'rgba(255,255,255,0.2)'),
+    // Warm brown shadows, deepest from the west: they read as earth, not as grey haze.
+    'hillshade-shadow-color': dark
+      ? four('rgba(0,0,0,0.42)')
+      : ['rgba(40,30,20,0.5)', 'rgba(40,30,20,0.38)', 'rgba(40,30,20,0.26)', 'rgba(40,30,20,0.38)'],
+  }
 }
 
-function addOverlays(map: MLMap, track: TrackData, darkBase: boolean) {
+/** First layer that should sit above the relief: water, roads, labels. */
+function reliefAnchor(map: MLMap): string | undefined {
+  return map
+    .getStyle()
+    .layers.find((l) => l.id === 'water' || l.type === 'line' || l.type === 'symbol')?.id
+}
+
+function addOverlays(map: MLMap, track: TrackData, styleId: BaseStyleId) {
   if (!map.getSource('terrain')) map.addSource('terrain', TERRAIN_SOURCE)
   map.setTerrain({ source: 'terrain', exaggeration: TERRAIN_EXAGGERATION })
+  const below = reliefAnchor(map)
+  // Terrain style: land tinted by height (green valleys, tan slopes, rock, snow).
+  if (hasRelief(styleId) && !map.getLayer('relief')) {
+    map.addLayer(
+      {
+        id: 'relief',
+        type: 'color-relief',
+        source: 'terrain',
+        paint: {
+          'color-relief-opacity': 0.9,
+          'color-relief-color': [
+            'interpolate',
+            ['linear'],
+            ['elevation'],
+            ...RELIEF_RAMP,
+          ] as ExpressionSpecification,
+        },
+      },
+      below,
+    )
+  }
+  // The base style paints glaciers flat white above the tint; let the relief show through.
+  if (hasRelief(styleId) && map.getLayer('landcover_glacier'))
+    map.setPaintProperty('landcover_glacier', 'fill-opacity', 0.55)
   if (!map.getLayer('hillshade')) {
-    map.addLayer({
-      id: 'hillshade',
-      type: 'hillshade',
-      source: 'terrain',
-      paint: hillshadePaint(darkBase),
-    })
+    map.addLayer(
+      {
+        id: 'hillshade',
+        type: 'hillshade',
+        source: 'terrain',
+        paint: hillshadePaint(isDarkStyle(styleId)),
+      },
+      below,
+    )
   }
   map.setSky?.({
     'sky-color': '#d6e2f3',
@@ -865,8 +905,9 @@ function addOverlays(map: MLMap, track: TrackData, darkBase: boolean) {
     type: 'geojson',
     data: emptyCollection(),
     cluster: true,
-    clusterRadius: 36,
-    clusterMaxZoom: 15,
+    // Small radius: photos show as thumbnails at normal zoom and only merge when truly crowded.
+    clusterRadius: 22,
+    clusterMaxZoom: 13,
   })
   map.addLayer({
     id: 'photo-clusters',

@@ -53,7 +53,7 @@ export function ReplayOverlay({
       <div className="pointer-events-none absolute inset-x-3 bottom-28 flex flex-col items-center gap-3 sm:inset-x-auto sm:left-6 sm:items-start">
         {stop && (
           <div
-            key={stopCard!.key}
+            key={`stop-${stopCard!.key}`}
             className="replay-card map-panel pointer-events-auto flex items-center gap-3 rounded-2xl px-4 py-3"
           >
             {(() => {
@@ -73,7 +73,10 @@ export function ReplayOverlay({
           </div>
         )}
         {photo && (
-          <div key={photoCard!.key} className="replay-card pointer-events-auto hidden sm:block">
+          <div
+            key={`photo-${photoCard!.key}`}
+            className="replay-card pointer-events-auto hidden sm:block"
+          >
             <Polaroid
               photo={photo}
               tilt={-2.5}
