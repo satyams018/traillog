@@ -203,3 +203,38 @@ A short log of key choices: what was decided, what else was considered, and the 
 - **Why:** user feedback was that the site read as a trekking log. Forest green and trail-blaze orange said "outdoors", and the numbers were all about climbing. Blue ink and a highlighter come from marking a route on a paper map, which fits any journey, and raspberry stands out on topo, satellite and dark maps alike. Showing climb only when there is one keeps a city walk from leading with "12 m climb". Role-based token names keep the code honest if the palette changes again.
 - **Tradeoff:** the 150 m threshold is a judgement call: a hilly city can cross it, which is fine. The landing sample is still a trek, labelled as an example, until there's a good non-trek GPX to show. The product name still says "Trail".
 
+## ADR-34: Share pages
+- **Decision:** `/u/<user>/<slug>` serves the SPA with link-preview tags filled in by Django (ADR-12). The app loads the story from `/api/public/u/<user>/<slug>?k=`. Access: the owner always sees it (so they can preview a private trip); otherwise Public trips open for anyone, Link trips need the current `share_token` (checked in constant time), and everything else is the same 404 as a missing trip (ADR-13). The public payload is built by hand, not from the owner serializers: only shared photos, the privacy-trimmed route and profile (re-based to 0 km, no timestamps), photo and stop positions re-scaled to the trimmed line, no pin for photos inside a zone, photo times rounded to the minute, and no EXIF, email, token or point counts. The privacy zone is trimmed in Python by haversine distance. The 1200×630 preview image is drawn with Pillow the first time it's requested and stored under a fingerprint of what it shows. The owner manages it all in one Share dialog: who can see it, copy link, make a new link, privacy zone and preview.
+- **Alternatives:** `ST_LineSubstring` in PostGIS (SPEC §6.4); rendering the preview image in a Celery job after every relevant change (SPEC §6.5, with `og_version`); reusing the owner's serializers with fields removed; a separate `/t/<token>` URL.
+- **Why:** trimming in Python works on the simplified line the map already uses, keeps photo and stop fractions consistent, and is unit-testable without a database; it takes milliseconds, so it runs inside the request that changes the zone. A fingerprint key means a changed title, cover, route or stats always gets a new image URL, which matters because WhatsApp and Slack cache previews by URL. It also removes the need to hook every place that can change those things. A hand-built payload makes "what is public" one short, reviewable function instead of a list of fields to remember to exclude. Tests cover the 404 rules, token rotation, trimming, re-scaling and the absence of private fields.
+- **Tradeoff:** the first preview request for a changed trip waits about 0.3 s while the image is drawn. Old preview images stay in storage until the trip is deleted. Share-page view counts (SPEC §13) aren't recorded yet. Locally, crawlers only see the tags from Django (port 8000) after `npm run build`; Vite serves the app without them.
+
+## ADR-35: Flythrough replay and a livelier map (from a look at similar products)
+- **Context:** a review of Relive, Strava (Flyover, 3D maps), Polarsteps (steps, Trip Reels), Komoot (tour pages) and FindPenguins (statistics) showed what users of this kind of product expect. Our biggest gaps were: no replay (their signature feature, and our own SPEC F7); photos shown only as plain dots; story stops missing from the map; a flat route line; no lifetime numbers; and no way for a visitor to pass a share page on.
+- **Decision:** a flythrough built into `TripMap`, driven by `requestAnimationFrame`.
+  - Each frame moves a distance along the route, places the camera there with `jumpTo` (tilted 64°, zoom chosen from the route length), and eases the heading toward a look-ahead point.
+  - The route's `line-gradient` turns the untravelled part white. The replay holds 1.8 s on each photo, and the page shows a polaroid card for the photo and a title card for the stop.
+  - A replay lasts about 45 s at 1×, whatever the route length.
+  - The page gets progress about ten times a second through `onPlayback`, which drives the scrubber and the elevation chart's cursor. The camera never goes through React state.
+  - Pages control it through an imperative handle (`play`, `pause`, `seek`, `setSpeed`, `exit`) wrapped in a `useReplay` hook, so the trip, share and landing pages share one implementation.
+  - Moving the map by hand pauses the replay. At the end, the camera eases back to the overview.
+- **Map changes:**
+  - The route has a start-to-finish gradient (atlas blue to raspberry) and a blurred glow.
+  - Each photo is a round, white-ringed thumbnail drawn on a canvas and registered as a map image, with the old dot as a fallback.
+  - Story stops are dark pins with labels.
+- **Alternatives:**
+  - SPEC §10's `FreeCameraOptions` with Turf.js.
+  - Recording a video server-side, as Relive does.
+  - A fixed speed in km/h.
+  - HTML markers for photos.
+- **Why:**
+  - `jumpTo` with centre, bearing and pitch is enough for a follow camera over terrain and avoids Turf. The geometry is small, pure and unit-tested (`lib/flythrough.ts`).
+  - A fixed duration keeps a 3 km city walk and a 300 km road trip equally watchable.
+  - Thumbnails as map images stay inside MapLibre's clustering and render in WebGL; hundreds of HTML markers would not.
+  - An imperative handle avoids re-rendering the page 60 times a second.
+- **Tradeoff:**
+  - The ≥ 30 fps target on a mid-range Android phone (SPEC F7) hasn't been measured yet.
+  - On phones the photo card is hidden during a replay so it doesn't cover the small map; stop titles still show.
+  - Thumbnails need the bucket's CORS rule for GET, already set by `ensure_bucket`.
+  - Lifetime totals come from a small `GET /api/trips/totals` endpoint, so they stay right beyond the first page of trips.
+

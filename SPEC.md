@@ -129,10 +129,10 @@ Browser ── same origin ─────────────────�
 6. **Accuracy metric:** for photos with both GPS and a timestamp, compute the time-match position as well and record the distance error.
 
 ### 6.4 `build_public_track(trip_id)`
-Runs whenever the track or privacy zone changes. It cuts the privacy zone from each end of the simplified line using `ST_LineSubstring` (fractions = zone ÷ total length) and trims the profile to match. If the route is shorter than 2 × the zone, nothing is shown publicly except stats. The result is stored as `Track.public_geom` and `Track.public_profile`.
+Runs whenever the track or privacy zone changes. It cuts the privacy zone from each end of the simplified line (in Python by haversine distance rather than `ST_LineSubstring`, so it's unit-testable without a database; ADR-34) and trims the profile to match, re-based to start at 0 km and without timestamps. Photo and stop positions on the share page are re-scaled to the trimmed line. If the route is shorter than 2 × the zone, nothing is shown publicly except stats. The result is stored as `Track.public_geom` and `Track.public_profile`.
 
 ### 6.5 `render_og_image(trip_id)`
-Pillow, 1200×630: the cover photo blurred and darkened as the background, the public route drawn in the projected bounding box, plus the title and three key stats. No map tiles are fetched (ADR-15). The image is stored at `og/<trip_uuid>-<version>.png`. The job runs again when the title, cover, stats or privacy zone change.
+Pillow, 1200×630: the cover photo blurred and darkened as the background, the public route drawn in the projected bounding box, plus the title and three key stats. No map tiles are fetched (ADR-15). The image is stored at `og/<trip_uuid>-<fingerprint>.png`, where the fingerprint hashes everything drawn on it. It's rendered on the first request for that fingerprint instead of by a job after every change (ADR-34); `Trip.og_version` is unused.
 
 ## 7. Data model
 
@@ -267,8 +267,8 @@ Claude writes most of the code; you review each piece, test it with your own GPX
 |---|---|---|
 | **Accounts** (you, ~1 h) | GitHub repo, Fly.io (card + spending alert), Neon (enable PostGIS), Cloudflare R2 (bucket + API token + CORS), MapTiler key. Gather 1–2 real GPX files with matching photos | All keys are in a local `.env` |
 | **Tracks & 3D map** ✅ | Repo, Compose (postgis/redis/SeaweedFS), CI, lint/format. Django + DRF + GeoDjango, email auth, Trip CRUD, GPX upload, `process_gpx` (stats, smoothing, simplify, profile). React app, 3D terrain map with route, elevation chart synced both ways, style switcher, light outdoorsy design | A real trek GPX shows the correct route, stats and synced chart on 3D terrain |
-| **Photos & flythrough** (photos ✅, flythrough next) | Presigned photo uploads + quota, `process_photo` (EXIF → DB, WebP copies, delete original), placement (EXIF → time-match → manual), camera-offset slider, photo markers + clusters + lightbox, flythrough with photo pop-ups | Photos from a real trip land in the right places and pop up during the flythrough |
-| **Story, sharing & deploy** | Story editor (simple form), highlights, Show all / Hide all, share token, privacy zones (`build_public_track`), share page + meta tags + OG image, deploy to Fly, smoke test on a phone, README (screenshots, GIF, metrics) | A share link from the live URL previews on WhatsApp and replays the trek on a phone |
+| **Photos & flythrough** (photos ✅, flythrough ✅) | Presigned photo uploads + quota, `process_photo` (EXIF → DB, WebP copies, delete original), placement (EXIF → time-match → manual), camera-offset slider, photo markers + clusters + lightbox, flythrough with photo pop-ups | Photos from a real trip land in the right places and pop up during the flythrough |
+| **Story, sharing & deploy** (story ✅, sharing ✅, deploy next) | Story editor (simple form), highlights, Show all / Hide all, share token, privacy zones (`build_public_track`), share page + meta tags + OG image, deploy to Fly, smoke test on a phone, README (screenshots, GIF, metrics) | A share link from the live URL previews on WhatsApp and replays the trek on a phone |
 | **v1.0.1** | Google sign-in, journal bodies, Playwright E2E, editor polish, demo video, onboard the trek club, real-usage metrics | — |
 
 **If behind schedule, cut in this order:** OG image (fall back to the cover photo as `og:image`) → manual drag placement (keep the offset slider) → photo clusters → style switcher (keep one style). **Never cut** privacy (F11), visibility/404 rules, or the deploy.
