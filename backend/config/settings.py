@@ -142,8 +142,14 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "config.pagination.CreatedAtCursorPagination",
     "PAGE_SIZE": 20,
     "EXCEPTION_HANDLER": "config.exceptions.api_exception_handler",
-    "DEFAULT_THROTTLE_RATES": {"upload": "20/min", "presign": "20/min"},
+    "DEFAULT_THROTTLE_RATES": {"upload": "20/min", "presign": "20/min", "public": "120/min"},
 }
+
+# Built SPA shell that share pages fill with link-preview meta tags (ADR-12). In development
+# Vite serves the app instead, so a missing file falls back to a minimal page.
+FRONTEND_INDEX = Path(
+    env("FRONTEND_INDEX", default=str(BASE_DIR.parent / "frontend" / "dist" / "index.html"))
+)
 
 # --- Celery (ADR-6) ---
 CELERY_BROKER_URL = env("REDIS_URL", default="redis://localhost:6379/0")

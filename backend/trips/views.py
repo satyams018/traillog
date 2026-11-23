@@ -17,8 +17,9 @@ from rest_framework.throttling import ScopedRateThrottle
 
 from core import storage
 
-from .models import Highlight, Photo, Track, Trip
+from .models import Highlight, Photo, Track, Trip, new_share_token
 from .photos import locate_on_line, point_at_fraction
+from .public import build_public_track
 from .serializers import (
     BulkVisibilitySerializer,
     HighlightOrderSerializer,
@@ -65,11 +66,42 @@ class TripViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         old_offset = serializer.instance.camera_offset_s
+        old_zone = serializer.instance.privacy_zone_m
         trip = serializer.save()
         if trip.camera_offset_s != old_offset:
             # Synchronous on purpose: matching reads only DB fields (~ms for 300 photos), so
             # the offset slider sees the new positions in the same response (ADR-29).
             match_photos(str(trip.id))
+        if trip.privacy_zone_m != old_zone:
+            build_public_track(trip)  # pure geometry on <= ~2,000 points: milliseconds
+
+    @action(detail=False, methods=["get"], url_path="totals")
+    def totals(self, request):
+        """Lifetime numbers for the trips page: trips, distance, climb, days, photos."""
+        trips = Trip.objects.filter(owner=request.user, status=Trip.Status.READY)
+        rows = list(trips.values_list("stats", "start_date", "end_date"))
+        days = sum((end - start).days + 1 for _, start, end in rows if start and end)
+        highest = [s.get("max_ele_m") for s, _, _ in rows if s.get("max_ele_m") is not None]
+        return Response(
+            {
+                "trips": len(rows),
+                "distance_m": round(sum(s.get("distance_m") or 0 for s, _, _ in rows), 1),
+                "gain_m": round(sum(s.get("gain_m") or 0 for s, _, _ in rows)),
+                "highest_m": max(highest) if highest else None,
+                "days": days,
+                "photos": Photo.objects.filter(
+                    trip__owner=request.user, status=Photo.Status.READY
+                ).count(),
+            }
+        )
+
+    @action(detail=True, methods=["post"], url_path="share-token/rotate")
+    def rotate_share_token(self, request, pk=None):
+        """New link for "Anyone with the link" trips; the old link stops working (ADR-13)."""
+        trip = self.get_object()
+        trip.share_token = new_share_token()
+        trip.save(update_fields=["share_token", "updated_at"])
+        return Response(self.get_serializer(trip).data)
 
     @transaction.atomic
     def perform_destroy(self, instance):
