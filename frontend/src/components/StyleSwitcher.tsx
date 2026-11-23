@@ -20,7 +20,7 @@ export default function StyleSwitcher({ value, onChange }: Props) {
           aria-checked={value === s.id}
           onClick={() => onChange(s.id)}
           className={`rounded-full px-3 py-1.5 font-semibold transition-colors ${
-            value === s.id ? 'bg-forest text-white' : 'text-ink hover:bg-lichen'
+            value === s.id ? 'bg-brand text-white' : 'text-ink hover:bg-wash'
           }`}
         >
           {s.label}

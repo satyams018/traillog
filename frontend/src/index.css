@@ -3,28 +3,33 @@
 @import 'uplot/dist/uPlot.min.css';
 
 /*
- * TrailLog design tokens — light & outdoorsy.
- * paper  #F6F7F2  page background (lichen-tinted off-white)
- * forest #1F5C3F  primary actions, links, chart
- * trail  #F07C1E  accent: the route itself, like painted trail blazes
- * ink    #16241D  main text      moss #56655C secondary text (≥ 5:1 on paper)
- * lichen #E4ECDF  tinted surfaces, chips
+ * TrailLog design tokens: a travel journal on a map (ADR-33).
+ * paper  #F4F6F9  page background, cool map paper     card #FFFFFF
+ * ink    #131C2E  main text (navy-black)               muted #556074 secondary text (≥ 5:1 on paper)
+ * brand  #2449C8  atlas blue: actions, links, route start, chart
+ * route  #E33A6E  highlighter raspberry: the route, your place on it, progress
+ * wash   #E7EDF6  tinted surfaces, chips               line #DCE2EB borders
+ * sky / mist / pine: decorative ridge layers only. Map and chart copies live in lib/palette.ts.
  */
 @theme {
   --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
-  --color-paper: #f6f7f2;
+  --font-hand: 'Caveat', 'Bradley Hand', cursive; /* polaroid captions only */
+  --color-paper: #f4f6f9;
   --color-card: #ffffff;
-  --color-lichen: #e4ecdf;
-  --color-line: #dfe5da;
-  --color-ink: #16241d;
-  --color-moss: #56655c;
-  --color-forest: #1f5c3f;
-  --color-forest-dark: #174831;
-  --color-trail: #f07c1e;
-  --color-trail-dark: #a34d07; /* text-safe orange: ≥ 5:1 on white, paper and orange chips */
+  --color-wash: #e7edf6;
+  --color-line: #dce2eb;
+  --color-ink: #131c2e;
+  --color-muted: #556074;
+  --color-brand: #2449c8;
+  --color-brand-dark: #1c389e;
+  --color-route: #e33a6e;
+  --color-route-dark: #a9184b; /* text-safe raspberry: ≥ 5:1 on white, paper and route chips */
   --color-danger: #b42318;
-  --shadow-soft: 0 1px 2px rgb(22 36 29 / 0.06), 0 8px 24px -6px rgb(22 36 29 / 0.12);
-  --shadow-lift: 0 2px 4px rgb(22 36 29 / 0.06), 0 16px 36px -10px rgb(22 36 29 / 0.22);
+  --color-sky: #dce6f4;
+  --color-mist: #c8d4e6;
+  --color-pine: #7187b5;
+  --shadow-soft: 0 1px 2px rgb(19 28 46 / 0.06), 0 8px 24px -6px rgb(19 28 46 / 0.12);
+  --shadow-lift: 0 2px 4px rgb(19 28 46 / 0.06), 0 16px 36px -10px rgb(19 28 46 / 0.22);
 }
 
 html,
@@ -42,7 +47,7 @@ body {
 
 /* Visible keyboard focus everywhere (mouse clicks don't show it). */
 :focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--color-forest) 55%, transparent);
+  outline: 3px solid color-mix(in srgb, var(--color-brand) 55%, transparent);
   outline-offset: 2px;
 }
 
@@ -51,14 +56,30 @@ body {
   background-size: cover;
   background-position: center;
 }
-.contours-card {
-  background-image: url('./assets/contours-card.svg');
-  background-size: cover;
-  background-position: center;
+
+/* RidgeBand's optional entrance: the route draws itself along the ridge, then the flag lands. */
+.trail-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: trail-draw 2.4s cubic-bezier(0.55, 0.1, 0.25, 1) 0.3s forwards;
+}
+.trail-markers {
+  opacity: 0;
+  animation: fade-in 0.5s ease-out 2.5s forwards;
+}
+@keyframes trail-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes fade-in {
+  to {
+    opacity: 1;
+  }
 }
 
-/* Frosted panel over the map */
-.map-panel {
+/* Frosted panel over the map (a utility, so it can apply from a breakpoint: sm:map-panel). */
+@utility map-panel {
   background: rgb(255 255 255 / 0.86);
   backdrop-filter: blur(10px) saturate(1.2);
   -webkit-backdrop-filter: blur(10px) saturate(1.2);
@@ -67,7 +88,7 @@ body {
 }
 
 .uplot .u-cursor-x {
-  border-right: 1px dashed var(--color-trail);
+  border-right: 1px dashed var(--color-route);
 }
 .uplot .u-legend {
   display: none;
@@ -78,6 +99,36 @@ body {
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Hover preview of a photo marker on the map. */
+.photo-popup .maplibregl-popup-content {
+  padding: 4px;
+  border-radius: 12px;
+  box-shadow: var(--shadow-lift);
+}
+
+/*
+ * Story polaroids "develop" the first time they scroll into view: pale and warm, then full
+ * colour, like an instant photo. It's the story's one automatic motion (reduced motion: off).
+ */
+.polaroid-photo {
+  filter: sepia(0.45) saturate(0.4) brightness(1.12) contrast(0.82);
+}
+.polaroid-photo[data-developed='true'] {
+  animation: polaroid-develop 1.8s cubic-bezier(0.3, 0.1, 0.3, 1) forwards;
+}
+@keyframes polaroid-develop {
+  to {
+    filter: none;
+  }
+}
+
+/* Reordering story stops glides them to their new places (View Transitions API). */
+::view-transition-group(*) {
+  animation-duration: 0.35s;
+  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
 }

@@ -32,10 +32,7 @@ export default function Signup() {
       footer={
         <>
           Already have an account?{' '}
-          <Link
-            to="/login"
-            className="font-semibold text-forest underline-offset-2 hover:underline"
-          >
+          <Link to="/login" className="font-semibold text-brand underline-offset-2 hover:underline">
             Log in
           </Link>
         </>

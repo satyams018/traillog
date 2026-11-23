@@ -28,7 +28,7 @@ export default function Login() {
           New here?{' '}
           <Link
             to="/signup"
-            className="font-semibold text-forest underline-offset-2 hover:underline"
+            className="font-semibold text-brand underline-offset-2 hover:underline"
           >
             Create an account
           </Link>

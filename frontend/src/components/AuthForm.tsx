@@ -57,7 +57,7 @@ export default function AuthForm({
       <div className="relative mx-auto max-w-md rounded-3xl border border-line bg-card p-7 shadow-[var(--shadow-lift)] sm:p-9">
         <Logo />
         <h1 className="mt-6 text-3xl font-extrabold tracking-tight">{title}</h1>
-        <p className="mt-1.5 text-moss">{subtitle}</p>
+        <p className="mt-1.5 text-muted">{subtitle}</p>
         <form onSubmit={handle} className="mt-7 space-y-5" noValidate>
           {fields.map((f) => {
             const errors = error?.fields?.[f.name]
@@ -78,7 +78,7 @@ export default function AuthForm({
                   </span>
                 ))}
                 {f.hint && !errors && (
-                  <span className="mt-1.5 block text-sm text-moss">{f.hint}</span>
+                  <span className="mt-1.5 block text-sm text-muted">{f.hint}</span>
                 )}
               </label>
             )
@@ -92,7 +92,7 @@ export default function AuthForm({
             {busy ? busyLabel : submitLabel}
           </button>
         </form>
-        <p className="mt-6 text-sm text-moss">{footer}</p>
+        <p className="mt-6 text-sm text-muted">{footer}</p>
       </div>
     </div>
   )

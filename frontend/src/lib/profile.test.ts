@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { chartData, nearestProfileIndex } from './profile'
+import { chartData, nearestProfileIndex, profileIndexAtFraction } from './profile'
 import type { ProfileRow } from './types'
 
 const profile: ProfileRow[] = Array.from({ length: 100 }, (_, i) => [
@@ -27,5 +27,19 @@ describe('chartData', () => {
     const [x, y] = chartData(profile)
     expect(x[10]).toBe(1)
     expect(y[10]).toBe(3010)
+  })
+})
+
+describe('profileIndexAtFraction', () => {
+  it('finds the sample at a share of the distance', () => {
+    // 99 samples span 9,900 m, so 25% is 2,475 m: sample 25 (2,500 m) is closest.
+    expect(profileIndexAtFraction(profile, 0.25)).toBe(25)
+    expect(profileIndexAtFraction(profile, 0.5)).toBe(50)
+  })
+
+  it('clamps to the ends', () => {
+    expect(profileIndexAtFraction(profile, -1)).toBe(0)
+    expect(profileIndexAtFraction(profile, 2)).toBe(99)
+    expect(profileIndexAtFraction([], 0.5)).toBe(0)
   })
 })

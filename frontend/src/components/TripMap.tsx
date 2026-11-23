@@ -1,4 +1,4 @@
-import type { Feature, FeatureCollection } from 'geojson'
+import type { Feature, FeatureCollection, Point as GeoPoint } from 'geojson'
 import {
   AttributionControl,
   type GeoJSONSource,
@@ -6,6 +6,7 @@ import {
   type MapLayerMouseEvent,
   type MapSourceDataEvent,
   NavigationControl,
+  Popup,
   ScaleControl,
   setWorkerUrl,
 } from 'maplibre-gl'
@@ -24,22 +25,45 @@ import {
   styleUrl,
 } from '../lib/mapStyles'
 import { nearestProfileIndex } from '../lib/profile'
-import type { TrackData } from '../lib/types'
+import type { Photo, TrackData } from '../lib/types'
+import { PALETTE } from '../lib/palette'
 
 interface Props {
   track: TrackData
   styleId: BaseStyleId
   hoverIndex: number | null
   onHoverIndex: (i: number | null) => void
-  /** Extra bottom padding (px) so the route stays clear of overlays such as the chart. */
-  bottomInset?: number
+  /** Extra padding (px) so the route stays clear of panels laid over the map. */
+  inset?: Inset
+  /** Landing-page mode: no controls or hover, and the camera turns slowly around the route. */
+  showcase?: boolean
+  /** Ready photos; those with a location get a (clustered) marker. */
+  photos?: Photo[]
+  onPhotoClick?: (photoId: string) => void
+  /** While true, the next map click calls onPlace with that position (manual placement). */
+  placing?: boolean
+  onPlace?: (lng: number, lat: number) => void
+  /** Fly to this photo; `nonce` lets the same photo be focused twice. */
+  focus?: { lng: number; lat: number; nonce: number } | null
 }
 
-const ROUTE_COLOR = '#F07C1E' // trail-blaze orange, same as the cards
+type Inset = Partial<Record<'top' | 'bottom' | 'left' | 'right', number>>
+
+const ROUTE_COLOR = PALETTE.route // highlighter raspberry, same as the cards
 
 // Production only: in dev, Vite serves MapLibre unbundled (optimizeDeps.exclude) and its
 // default worker path works, while Vite's dev worker wrapper does not.
 if (import.meta.env.PROD) setWorkerUrl(workerUrl)
+
+/** Base padding around the route plus any panel insets. */
+function pad(inset: Inset, extra = 0) {
+  return {
+    top: 60 + (inset.top ?? 0),
+    bottom: 40 + extra + (inset.bottom ?? 0),
+    left: 60 + (inset.left ?? 0),
+    right: 60 + (inset.right ?? 0),
+  }
+}
 
 /**
  * 3D terrain map with the route, start/end markers and a cursor that follows the
@@ -50,15 +74,21 @@ export default function TripMap({
   styleId,
   hoverIndex,
   onHoverIndex,
-  bottomInset = 0,
+  inset = {},
+  showcase = false,
+  photos = [],
+  onPhotoClick,
+  placing = false,
+  onPlace,
+  focus,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MLMap | null>(null)
   const [loading, setLoading] = useState(true)
   // Keep the latest values for map event handlers without re-binding them.
-  const latest = useRef({ track, onHoverIndex, styleId })
+  const latest = useRef({ track, onHoverIndex, styleId, photos, onPhotoClick, placing, onPlace })
   useLayoutEffect(() => {
-    latest.current = { track, onHoverIndex, styleId }
+    latest.current = { track, onHoverIndex, styleId, photos, onPhotoClick, placing, onPlace }
   })
 
   // Create the map once.
@@ -73,7 +103,8 @@ export default function TripMap({
       maxPitch: 80,
       // One finger scrolls the page on phones; two fingers (or Ctrl/⌘ + scroll) move the map.
       // Without this, a large map traps the page scroll on touch screens.
-      cooperativeGestures: true,
+      cooperativeGestures: !showcase,
+      interactive: !showcase,
       attributionControl: false,
     })
     // Frame the route: lay its main direction across the wide map, then tilt for 3D.
@@ -83,22 +114,25 @@ export default function TripMap({
         [maxX, maxY],
       ],
       {
-        padding: { top: 60, bottom: 50 + bottomInset, left: 60, right: 60 },
+        padding: pad(inset, 10),
         bearing: cameraBearingForRoute(track.geometry.coordinates),
       },
     )
     if (camera) map.jumpTo({ ...camera, pitch: MAP_PITCH })
     map.addControl(new AttributionControl({ compact: true }), 'bottom-right')
-    map.addControl(new NavigationControl({ visualizePitch: true }), 'top-right')
-    map.addControl(new ScaleControl({ unit: 'metric' }), 'bottom-left')
+    if (!showcase) {
+      map.addControl(new NavigationControl({ visualizePitch: true }), 'top-right')
+      map.addControl(new ScaleControl({ unit: 'metric' }), 'bottom-left')
+    }
     mapRef.current = map
     // Dev-only handle for debugging and end-to-end tests; stripped from production builds.
     if (import.meta.env.DEV) (window as unknown as { __traillogMap?: MLMap }).__traillogMap = map
 
     // setStyle() wipes custom sources, so overlays are (re)added on every style load.
-    map.on('style.load', () =>
-      addOverlays(map, latest.current.track, isDarkStyle(latest.current.styleId)),
-    )
+    map.on('style.load', () => {
+      addOverlays(map, latest.current.track, isDarkStyle(latest.current.styleId))
+      ;(map.getSource('photos') as GeoJSONSource).setData(photoFeatures(latest.current.photos))
+    })
     // Fit once the terrain heights are in (terrain lifts the route, so fitting earlier would
     // over-zoom). Don't wait for 'idle': with a tilted view that waits for every tile out to
     // the horizon (~20 s). Base-map tiles keep streaming in after the reveal.
@@ -107,13 +141,12 @@ export default function TripMap({
       if (revealed) return
       revealed = true
       map.off('sourcedata', onSourceData)
-      fitRouteToView(map, latest.current.track.geometry.coordinates, {
-        top: 60,
-        bottom: 40 + bottomInset,
-        left: 60,
-        right: 60,
-      })
+      fitRouteToView(map, latest.current.track.geometry.coordinates, pad(inset))
       setLoading(false)
+      // Showcase: the camera drifts slowly round the route; skipped when motion is reduced.
+      if (showcase && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        map.easeTo({ bearing: map.getBearing() + 25, duration: 40_000, easing: (t) => t })
+      }
       // Compact attribution starts expanded and re-expands whenever a new source adds credits.
       // Keep it collapsed to its (i) button until the initial load settles so it never covers
       // the chart; the credits stay one tap away, as the tile licences require.
@@ -138,8 +171,56 @@ export default function TripMap({
       latest.current.onHoverIndex(nearestProfileIndex(profile, e.lngLat.lng, e.lngLat.lat))
     })
     map.on('mouseleave', hitLayer, () => {
-      map.getCanvas().style.cursor = ''
+      map.getCanvas().style.cursor = latest.current.placing ? 'crosshair' : ''
       latest.current.onHoverIndex(null)
+    })
+
+    // Photos: click a marker to open it, click a cluster to zoom into it, hover for a preview.
+    const preview = new Popup({ closeButton: false, offset: 14, className: 'photo-popup' })
+    map.on('click', (e) => {
+      if (latest.current.placing) {
+        latest.current.onPlace?.(e.lngLat.lng, e.lngLat.lat)
+        return
+      }
+      const [hit] = map.queryRenderedFeatures(e.point, {
+        layers: ['photo-points', 'photo-clusters'],
+      })
+      if (!hit) return
+      if (hit.properties.cluster) {
+        const src = map.getSource('photos') as GeoJSONSource
+        src.getClusterExpansionZoom(hit.properties.cluster_id).then((zoom) =>
+          map.easeTo({
+            center: (hit.geometry as GeoPoint).coordinates as [number, number],
+            zoom: zoom + 0.5,
+          }),
+        )
+      } else {
+        preview.remove()
+        latest.current.onPhotoClick?.(hit.properties.id)
+      }
+    })
+    for (const layer of ['photo-points', 'photo-clusters']) {
+      map.on('mouseenter', layer, () => {
+        if (!latest.current.placing) map.getCanvas().style.cursor = 'pointer'
+      })
+      map.on('mouseleave', layer, () => {
+        map.getCanvas().style.cursor = latest.current.placing ? 'crosshair' : ''
+        preview.remove()
+      })
+    }
+    map.on('mousemove', 'photo-points', (e) => {
+      const f = e.features?.[0]
+      if (!f || latest.current.placing) return
+      const photo = latest.current.photos.find((p) => p.id === f.properties.id)
+      if (!photo?.thumb_url) return
+      const img = document.createElement('img')
+      img.src = photo.thumb_url
+      img.alt = ''
+      img.className = 'block h-28 w-40 rounded-lg object-cover'
+      preview
+        .setLngLat((f.geometry as GeoPoint).coordinates as [number, number])
+        .setDOMContent(img)
+        .addTo(map)
     })
 
     return () => {
@@ -162,6 +243,23 @@ export default function TripMap({
     map.once('style.load', () => setLoading(false))
   }, [styleId])
 
+  // Keep photo markers in sync with the photo list.
+  useEffect(() => {
+    const src = mapRef.current?.getSource('photos') as GeoJSONSource | undefined
+    src?.setData(photoFeatures(photos))
+  }, [photos])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (map) map.getCanvas().style.cursor = placing ? 'crosshair' : ''
+  }, [placing])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !focus) return
+    map.flyTo({ center: [focus.lng, focus.lat], zoom: Math.max(map.getZoom(), 14.5) })
+  }, [focus])
+
   // Move the cursor point when the chart is hovered.
   useEffect(() => {
     const src = mapRef.current?.getSource('cursor') as GeoJSONSource | undefined
@@ -179,16 +277,16 @@ export default function TripMap({
   }, [hoverIndex, track])
 
   return (
-    <div className="relative h-full w-full bg-lichen">
+    <div className="relative h-full w-full bg-wash">
       <div ref={containerRef} className="h-full w-full" aria-label="3D map of the route" />
       <div
         aria-hidden={!loading}
-        className={`pointer-events-none absolute inset-0 flex items-center justify-center bg-lichen transition-opacity duration-700 ${
+        className={`pointer-events-none absolute inset-0 flex items-center justify-center bg-wash transition-opacity duration-700 ${
           loading ? 'opacity-100' : 'opacity-0'
         }`}
       >
         <div className="absolute inset-0 animate-pulse contours-hero opacity-60" />
-        <p className="map-panel relative rounded-full px-4 py-2 text-sm font-semibold text-forest">
+        <p className="map-panel relative rounded-full px-4 py-2 text-sm font-semibold text-brand">
           Loading 3D terrain…
         </p>
       </div>
@@ -198,6 +296,35 @@ export default function TripMap({
 
 function emptyCollection(): FeatureCollection {
   return { type: 'FeatureCollection', features: [] }
+}
+
+function photoFeatures(photos: Photo[]): FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: photos
+      .filter((p) => p.status === 'ready' && p.location)
+      .map((p) => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [p.location![0], p.location![1]] },
+        properties: { id: p.id, hidden: !p.is_public },
+      })),
+  }
+}
+
+/** The base style's own label font, so cluster counts render with glyphs it really has. */
+function labelFont(map: MLMap): string[] {
+  const fonts: string[][] = []
+  for (const layer of map.getStyle().layers) {
+    const font = layer.type === 'symbol' ? layer.layout?.['text-font'] : undefined
+    if (Array.isArray(font) && font.every((f) => typeof f === 'string'))
+      fonts.push(font as string[])
+  }
+  // Prefer a bold, then a regular face; water labels often come first and are italic.
+  return (
+    fonts.find((f) => /bold/i.test(f[0])) ??
+    fonts.find((f) => /regular/i.test(f[0])) ??
+    fonts[0] ?? ['Noto Sans Regular']
+  )
 }
 
 /**
@@ -274,7 +401,11 @@ function addOverlays(map: MLMap, track: TrackData, darkBase: boolean) {
       paint: hillshadePaint(darkBase),
     })
   }
-  map.setSky?.({ 'sky-color': '#cfe3ec', 'horizon-color': '#f6f7f2', 'fog-color': '#f6f7f2' })
+  map.setSky?.({
+    'sky-color': '#d6e2f3',
+    'horizon-color': PALETTE.paper,
+    'fog-color': PALETTE.paper,
+  })
 
   const coords = track.geometry.coordinates
   map.addSource('route', {
@@ -316,7 +447,53 @@ function addOverlays(map: MLMap, track: TrackData, darkBase: boolean) {
     source: 'endpoints',
     paint: {
       'circle-radius': 7,
-      'circle-color': ['match', ['get', 'kind'], 'start', '#1F5C3F', '#F07C1E'],
+      'circle-color': ['match', ['get', 'kind'], 'start', PALETTE.brand, PALETTE.route],
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 3,
+    },
+  })
+
+  // Photo markers cluster when zoomed out (SPEC F6); data is set by the caller.
+  map.addSource('photos', {
+    type: 'geojson',
+    data: emptyCollection(),
+    cluster: true,
+    clusterRadius: 36,
+    clusterMaxZoom: 15,
+  })
+  map.addLayer({
+    id: 'photo-clusters',
+    type: 'circle',
+    source: 'photos',
+    filter: ['has', 'point_count'],
+    paint: {
+      'circle-color': PALETTE.brand,
+      'circle-radius': ['step', ['get', 'point_count'], 14, 10, 18, 50, 22],
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 3,
+    },
+  })
+  map.addLayer({
+    id: 'photo-cluster-count',
+    type: 'symbol',
+    source: 'photos',
+    filter: ['has', 'point_count'],
+    layout: {
+      'text-field': ['get', 'point_count_abbreviated'],
+      'text-font': labelFont(map),
+      'text-size': 13,
+      'text-allow-overlap': true,
+    },
+    paint: { 'text-color': '#ffffff' },
+  })
+  map.addLayer({
+    id: 'photo-points',
+    type: 'circle',
+    source: 'photos',
+    filter: ['!', ['has', 'point_count']],
+    paint: {
+      'circle-color': ['case', ['get', 'hidden'], PALETTE.muted, PALETTE.brand],
+      'circle-radius': 8,
       'circle-stroke-color': '#ffffff',
       'circle-stroke-width': 3,
     },

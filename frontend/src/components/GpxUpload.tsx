@@ -52,14 +52,14 @@ export default function GpxUpload({ trip }: { trip: Trip }) {
         pick(e.dataTransfer.files[0])
       }}
       className={`rounded-3xl border-2 border-dashed px-6 py-12 text-center transition-colors ${
-        dragging ? 'border-forest bg-lichen/60' : 'border-forest/25 bg-card'
+        dragging ? 'border-brand bg-wash/60' : 'border-brand/25 bg-card'
       }`}
     >
-      <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-lichen text-forest">
+      <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-wash text-brand">
         <UploadCloud className="h-7 w-7" aria-hidden />
       </span>
       <p className="mt-4 text-xl font-bold">Add your GPS track</p>
-      <p className="mx-auto mt-1.5 max-w-sm text-moss">
+      <p className="mx-auto mt-1.5 max-w-sm text-muted">
         Drag a GPX file here, or choose one. Export it from Strava, Garmin, OsmAnd or any GPS app
         (up to {MAX_MB} MB).
       </p>

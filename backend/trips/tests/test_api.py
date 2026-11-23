@@ -222,3 +222,14 @@ def test_build_preview_caps_points():
     out = build_preview(coords, max_points=64)
     assert len(out) == 64
     assert out[0] == [77.0, 32.0] and out[-1] == [round(77.0 + 999e-4, 5), 32.0]
+
+
+def test_trip_has_small_elevation_preview(client, django_capture_on_commit_callbacks):
+    trip = create_trip(client)
+    with django_capture_on_commit_callbacks(execute=True):
+        upload(client, trip["id"], gpx_xml([make_points(n=120, dele=5.0)]))
+    data = client.get(f"/api/trips/{trip['id']}").data
+    eles = data["elevation_preview"]
+    assert len(eles) == 48
+    assert eles == sorted(eles)  # the synthetic track climbs steadily
+    assert client.get("/api/trips").data["results"][0]["elevation_preview"] == eles

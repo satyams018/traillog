@@ -44,7 +44,7 @@ export default function ConfirmDialog({
         <Trash2 className="h-5 w-5" aria-hidden />
       </span>
       <h2 className="mt-4 text-xl font-extrabold">{title}</h2>
-      <p className="mt-2 text-moss">{body}</p>
+      <p className="mt-2 text-muted">{body}</p>
       <div className="mt-7 flex justify-end gap-2">
         <button onClick={onClose} className={btn.secondary} autoFocus>
           Cancel

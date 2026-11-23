@@ -3,6 +3,7 @@ import uPlot from 'uplot'
 
 import { chartData } from '../lib/profile'
 import type { ProfileRow } from '../lib/types'
+import { PALETTE, withAlpha } from '../lib/palette'
 
 interface Props {
   profile: ProfileRow[]
@@ -33,19 +34,19 @@ export default function ElevationChart({ profile, hoverIndex, onHoverIndex, heig
       height,
       padding: [12, 8, 0, 0],
       legend: { show: false },
-      cursor: { y: false, points: { size: 10, fill: '#F07C1E' }, drag: { x: false, y: false } },
+      cursor: { y: false, points: { size: 10, fill: PALETTE.route }, drag: { x: false, y: false } },
       scales: { x: { time: false } },
       axes: [
         {
-          stroke: '#56655C',
+          stroke: PALETTE.muted,
           grid: { show: false },
-          ticks: { stroke: '#DFE5DA' },
+          ticks: { stroke: PALETTE.line },
           values: (_u, vals) => vals.map((v) => `${v} km`),
           font: '500 12px "Plus Jakarta Sans", sans-serif',
         },
         {
-          stroke: '#56655C',
-          grid: { stroke: '#DFE5DA', width: 1 },
+          stroke: PALETTE.muted,
+          grid: { stroke: PALETTE.line, width: 1 },
           ticks: { show: false },
           size: 68, // room for "4,000 m" in the bolder font
           values: (_u, vals) => vals.map((v) => `${v.toLocaleString('en-IN')} m`),
@@ -56,12 +57,12 @@ export default function ElevationChart({ profile, hoverIndex, onHoverIndex, heig
         {},
         {
           label: 'Elevation',
-          stroke: '#1F5C3F',
+          stroke: PALETTE.brand,
           width: 2.5,
           fill: (u) => {
             const g = u.ctx.createLinearGradient(0, 0, 0, u.bbox.height)
-            g.addColorStop(0, 'rgba(31,92,63,0.28)')
-            g.addColorStop(1, 'rgba(31,92,63,0.03)')
+            g.addColorStop(0, withAlpha(PALETTE.brand, 0.24))
+            g.addColorStop(1, withAlpha(PALETTE.brand, 0.02))
             return g
           },
           points: { show: false },
@@ -105,7 +106,7 @@ export default function ElevationChart({ profile, hoverIndex, onHoverIndex, heig
   }, [hoverIndex])
 
   if (!profile.some((r) => r[1] != null)) {
-    return <p className="px-2 py-6 text-sm text-moss">This track has no elevation data.</p>
+    return <p className="px-2 py-6 text-sm text-muted">This track has no elevation data.</p>
   }
   return <div ref={ref} className="w-full" aria-label="Elevation profile" />
 }
