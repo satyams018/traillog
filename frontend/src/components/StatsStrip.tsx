@@ -1,33 +1,63 @@
-import { ArrowUpToLine, Clock, Footprints, Gauge, Route, TrendingUp } from 'lucide-react'
-
-import { formatDistance, formatDuration, formatElevation, formatPace } from '../lib/format'
+import { formatDistance, formatDuration, formatElevation, formatSpeed } from '../lib/format'
+import { isHilly } from '../lib/stats'
 import type { TripStats } from '../lib/types'
 
-export default function StatsStrip({ stats }: { stats: Partial<TripStats> }) {
-  const items = [
-    { icon: Route, label: 'Distance', value: formatDistance(stats.distance_m) },
-    { icon: TrendingUp, label: 'Total climb', value: formatElevation(stats.gain_m) },
-    { icon: ArrowUpToLine, label: 'Highest point', value: formatElevation(stats.max_ele_m) },
-    { icon: Footprints, label: 'Moving time', value: formatDuration(stats.moving_s) },
-    { icon: Clock, label: 'Total time', value: formatDuration(stats.total_s) },
-    { icon: Gauge, label: 'Moving pace', value: formatPace(stats.pace_s_per_km) },
+type Item = { label: string; value: string; show: boolean }
+
+/**
+ * Trip numbers in two weights. `lead`: distance and time, plus climb for hilly trips, in
+ * large numerals over the map. `quiet`: moving time, average speed and (hilly trips) the
+ * highest point, in a small row. Numbers the GPX can't give (no times, no elevation) are left
+ * out rather than shown as dashes.
+ */
+export default function StatsStrip({
+  stats,
+  variant,
+}: {
+  stats: Partial<TripStats>
+  variant: 'lead' | 'quiet'
+}) {
+  const hilly = isHilly(stats)
+  if (variant === 'lead') {
+    const items: Item[] = [
+      { label: 'distance', value: formatDistance(stats.distance_m), show: true },
+      { label: 'time', value: formatDuration(stats.total_s), show: stats.total_s != null },
+      { label: 'climb', value: formatElevation(stats.gain_m), show: hilly },
+    ]
+    return (
+      <dl className="flex gap-6">
+        {items
+          .filter((i) => i.show)
+          .map(({ label, value }) => (
+            <div key={label} className="flex flex-col-reverse">
+              <dt className="text-sm text-muted">{label}</dt>
+              <dd className="text-2xl font-extrabold tracking-[-0.03em] whitespace-nowrap text-brand tabular-nums sm:text-[1.75rem]">
+                {value}
+              </dd>
+            </div>
+          ))}
+      </dl>
+    )
+  }
+  const items: Item[] = [
+    { label: 'Moving time', value: formatDuration(stats.moving_s), show: stats.moving_s != null },
+    {
+      label: 'Average speed',
+      value: formatSpeed(stats.avg_moving_speed_kmh),
+      show: stats.avg_moving_speed_kmh != null,
+    },
+    { label: 'Highest point', value: formatElevation(stats.max_ele_m), show: hilly },
   ]
   return (
-    <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-      {items.map(({ icon: Icon, label, value }) => (
-        <div
-          key={label}
-          className="rounded-2xl border border-line bg-card px-4 py-3.5 shadow-[var(--shadow-soft)]"
-        >
-          <dt className="flex items-center gap-1.5 text-sm font-medium text-moss">
-            <Icon className="h-4 w-4 text-trail-dark" aria-hidden />
-            {label}
-          </dt>
-          <dd className="mt-1 text-xl font-extrabold tracking-tight tabular-nums sm:text-2xl">
-            {value}
-          </dd>
-        </div>
-      ))}
+    <dl className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+      {items
+        .filter((i) => i.show)
+        .map(({ label, value }) => (
+          <div key={label} className="flex gap-1.5">
+            <dt className="text-muted">{label}</dt>
+            <dd className="font-bold tabular-nums">{value}</dd>
+          </div>
+        ))}
     </dl>
   )
 }

@@ -16,11 +16,11 @@ export default function StatusMessage({
 }) {
   return (
     <div className="mx-auto max-w-md px-4 py-24 text-center">
-      <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-lichen text-forest">
+      <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-wash text-brand">
         <Compass className="h-7 w-7" aria-hidden />
       </span>
       <h1 className="mt-5 text-3xl font-extrabold tracking-tight">{title}</h1>
-      <p className="mt-3 text-moss">{body}</p>
+      <p className="mt-3 text-muted">{body}</p>
       <div className="mt-8 flex justify-center gap-3">
         {action}
         <Link to="/trips" className={btn.secondary}>

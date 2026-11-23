@@ -28,6 +28,11 @@ export function formatPace(sPerKm: number | null | undefined): string {
   return `${m}:${s.toString().padStart(2, '0')} /km`
 }
 
+export function formatSpeed(kmh: number | null | undefined): string {
+  if (kmh == null) return '–'
+  return `${kmh < 10 ? kmh.toFixed(1) : Math.round(kmh)} km/h`
+}
+
 export function formatDateRange(start: string | null, end: string | null): string {
   if (!start) return ''
   const fmt = (d: string) =>
@@ -37,4 +42,38 @@ export function formatDateRange(start: string | null, end: string | null): strin
       year: 'numeric',
     })
   return !end || end === start ? fmt(start) : `${fmt(start)} – ${fmt(end)}`
+}
+
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 ** 2) return `${Math.round(n / 1024)} kB`
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(n < 10 * 1024 ** 2 ? 1 : 0)} MB`
+  return `${(n / 1024 ** 3).toFixed(2)} GB`
+}
+
+/** Camera clock offset in seconds -> "+1h 05m", "−3 min", "No offset". */
+export function formatOffset(s: number): string {
+  if (s === 0) return 'No offset'
+  const sign = s > 0 ? '+' : '−'
+  const abs = Math.abs(s)
+  const h = Math.floor(abs / 3600)
+  const m = Math.round((abs % 3600) / 60)
+  if (h === 0) return `${sign}${m} min`
+  return `${sign}${h}h ${m.toString().padStart(2, '0')}m`
+}
+
+/** A photo's time for a polaroid caption, e.g. "10 May, 8:40 am", in the trip's time zone. */
+export function formatPhotoTime(iso: string | null, timeZone?: string): string {
+  if (!iso) return ''
+  try {
+    return new Intl.DateTimeFormat('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone: timeZone || undefined,
+    }).format(new Date(iso))
+  } catch {
+    return '' // unknown time zone name
+  }
 }

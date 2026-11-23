@@ -25,3 +25,18 @@ export function nearestProfileIndex(profile: ProfileRow[], lng: number, lat: num
 export function chartData(profile: ProfileRow[]): [number[], (number | null)[]] {
   return [profile.map((r) => r[0] / 1000), profile.map((r) => r[1])]
 }
+
+/** Index of the profile sample at a fraction (0..1) of the route's length (binary search). */
+export function profileIndexAtFraction(profile: ProfileRow[], fraction: number): number {
+  if (!profile.length) return 0
+  const target = Math.max(0, Math.min(1, fraction)) * profile[profile.length - 1][0]
+  let lo = 0
+  let hi = profile.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (profile[mid][0] < target) lo = mid + 1
+    else hi = mid
+  }
+  // lo is the first sample at or past the target; the one before may be closer.
+  return lo > 0 && target - profile[lo - 1][0] < profile[lo][0] - target ? lo - 1 : lo
+}

@@ -20,7 +20,7 @@ export default function Layout() {
               to="/trips"
               className={({ isActive }) =>
                 `flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold whitespace-nowrap ${
-                  isActive ? 'bg-lichen text-forest' : 'text-moss hover:text-ink'
+                  isActive ? 'bg-wash text-brand' : 'text-muted hover:text-ink'
                 }`
               }
             >
@@ -32,7 +32,7 @@ export default function Layout() {
             {user ? (
               <>
                 <span
-                  className="hidden h-8 w-8 items-center justify-center rounded-full bg-trail/15 font-bold text-trail-dark sm:flex"
+                  className="hidden h-8 w-8 items-center justify-center rounded-full bg-route/15 font-bold text-route-dark sm:flex"
                   title={`Signed in as @${user.username}`}
                   aria-hidden
                 >
@@ -67,8 +67,8 @@ export default function Layout() {
         <Outlet />
       </main>
       <footer className="border-t border-line bg-card">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 px-4 py-6 text-sm text-moss">
-          <span>TrailLog: turn your treks into stories.</span>
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 px-4 py-6 text-sm text-muted">
+          <span>TrailLog: turn your trips into stories.</span>
           <span>Map data © OpenStreetMap contributors</span>
         </div>
       </footer>

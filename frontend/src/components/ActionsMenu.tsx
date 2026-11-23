@@ -36,7 +36,7 @@ export default function ActionsMenu({ actions, label }: { actions: MenuAction[];
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="flex h-10 w-10 items-center justify-center rounded-full border border-line bg-card text-ink hover:border-forest/40"
+        className="flex h-10 w-10 items-center justify-center rounded-full border border-line bg-card text-ink hover:border-brand/40"
       >
         <MoreHorizontal className="h-5 w-5" aria-hidden />
       </button>

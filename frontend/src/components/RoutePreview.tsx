@@ -1,3 +1,5 @@
+import { PALETTE } from '../lib/palette'
+
 /** Small SVG outline of a route for trip cards. Points are [lng, lat]. */
 export default function RoutePreview({ points }: { points: [number, number][] }) {
   if (points.length < 2) return null
@@ -35,16 +37,16 @@ export default function RoutePreview({ points }: { points: [number, number][] })
       <path
         d={d}
         fill="none"
-        stroke="#F07C1E"
+        stroke={PALETTE.route}
         strokeWidth={3.5}
         strokeLinejoin="round"
         strokeLinecap="round"
       />
-      {/* Start: green dot. Finish: orange flag. */}
-      <circle cx={sx} cy={sy} r={5.5} fill="#1F5C3F" stroke="#ffffff" strokeWidth={2.5} />
+      {/* Start: blue dot. Finish: raspberry flag. */}
+      <circle cx={sx} cy={sy} r={5.5} fill={PALETTE.brand} stroke="#ffffff" strokeWidth={2.5} />
       <path
         d={`M${ex - 1} ${ey + 6} V${ey - 9} L${ex + 9} ${ey - 5.5} L${ex - 1} ${ey - 2}`}
-        fill="#F07C1E"
+        fill={PALETTE.route}
         stroke="#ffffff"
         strokeWidth={1.5}
         strokeLinejoin="round"

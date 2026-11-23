@@ -1,30 +1,37 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CalendarDays, FileUp, Globe, Link2, Lock, Trash2 } from 'lucide-react'
-import { Suspense, lazy, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
 import ActionsMenu from '../components/ActionsMenu'
 import ConfirmDialog from '../components/ConfirmDialog'
+import CameraOffset from '../components/CameraOffset'
 import ElevationChart from '../components/ElevationChart'
 import GpxUpload from '../components/GpxUpload'
+import Lightbox from '../components/Lightbox'
+import PhotoGrid from '../components/PhotoGrid'
+import PhotoStrip from '../components/PhotoStrip'
+import PhotoUpload from '../components/PhotoUpload'
 import StatsStrip from '../components/StatsStrip'
 import StatusMessage from '../components/StatusMessage'
+import StoryThread from '../components/StoryThread'
 import StyleSwitcher from '../components/StyleSwitcher'
 import { btn } from '../components/ui'
 import { ApiError, api } from '../lib/api'
 import { formatDateRange, formatDistance, formatElevation } from '../lib/format'
 import { type BaseStyleId, DEFAULT_STYLE } from '../lib/mapStyles'
-import type { TrackData, Trip, Visibility } from '../lib/types'
+import { profileIndexAtFraction } from '../lib/profile'
+import type { Highlight, HighlightInput, Photo, TrackData, Trip, Visibility } from '../lib/types'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
+import { useMediaQuery } from '../lib/useMediaQuery'
+import { withViewTransition } from '../lib/viewTransition'
 
 // MapLibre is large, so it loads only on pages that show a map (SPEC §11).
 const TripMap = lazy(() => import('../components/TripMap'))
 
 const POLL_MS = 2000
 const POLL_LIMIT_MS = 2 * 60 * 1000
-const CHART_HEIGHT = 130
-// Space the chart panel takes at the bottom of the map (chart + header + margins).
-const CHART_INSET = CHART_HEIGHT + 80
+const CHART_HEIGHT = 120
 
 const VISIBILITY: Record<Visibility, { label: string; icon: typeof Lock; help: string }> = {
   private: { label: 'Private', icon: Lock, help: 'Only you can see this trip.' },
@@ -45,7 +52,11 @@ export default function TripPage() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const pollStarted = useRef<number | null>(null)
+  const photoPollStarted = useRef<number | null>(null)
+  const mapSectionRef = useRef<HTMLElement>(null)
 
+  // On wider screens the title panel sits over the map, so the route is framed beside it.
+  const wide = useMediaQuery('(min-width: 640px)')
   const tripQuery = useQuery({
     queryKey: ['trip', id],
     queryFn: () => api.get<Trip>(`/api/trips/${id}`),
@@ -69,6 +80,131 @@ export default function TripPage() {
     enabled: trip?.status === 'ready',
   })
 
+  const photosQuery = useQuery({
+    queryKey: ['photos', id],
+    queryFn: () => api.get<Photo[]>(`/api/trips/${id}/photos`),
+    enabled: !!trip,
+    // Poll while uploads are being processed, giving up after 3 minutes.
+    refetchInterval: (q) => {
+      if (!q.state.data?.some((p) => p.status === 'pending')) {
+        photoPollStarted.current = null
+        return false
+      }
+      photoPollStarted.current ??= Date.now()
+      return Date.now() - photoPollStarted.current < 3 * 60 * 1000 ? POLL_MS : false
+    },
+  })
+  const photos = photosQuery.data ?? []
+  const readyPhotos = photos.filter((p) => p.status === 'ready')
+  // Stored bytes are counted when processing finishes, after the upload itself: refresh
+  // the storage bar whenever that total changes.
+  const storedBytes = readyPhotos.reduce((sum, p) => sum + p.stored_bytes, 0)
+  useEffect(() => {
+    qc.invalidateQueries({ queryKey: ['me'] })
+  }, [storedBytes, qc])
+
+  const setPhoto = (p: Photo) =>
+    qc.setQueryData<Photo[]>(['photos', id], (old) => old?.map((x) => (x.id === p.id ? p : x)))
+  const patchPhoto = useMutation({
+    mutationFn: ({ photo, body }: { photo: Photo; body: Record<string, unknown> }) =>
+      api.patch<Photo>(`/api/photos/${photo.id}`, body),
+    onSuccess: (p) => {
+      setPhoto(p)
+      qc.invalidateQueries({ queryKey: ['highlights', id] }) // a stop's position may move
+    },
+  })
+  const bulk = useMutation({
+    mutationFn: (isPublic: boolean) =>
+      api.post(`/api/trips/${id}/photos/bulk`, { photo_ids: 'all', is_public: isPublic }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['photos', id] }),
+  })
+  const deletePhoto = useMutation({
+    mutationFn: (photo: Photo) => api.delete(`/api/photos/${photo.id}`),
+    onSuccess: (_, photo) => {
+      qc.setQueryData<Photo[]>(['photos', id], (old) => old?.filter((x) => x.id !== photo.id))
+      qc.invalidateQueries({ queryKey: ['me'] })
+      qc.invalidateQueries({ queryKey: ['highlights', id] })
+      setPhotoToDelete(null)
+    },
+  })
+  const offset = useMutation({
+    mutationFn: (seconds: number) =>
+      api.patch<Trip>(`/api/trips/${id}`, { camera_offset_s: seconds }),
+    onSuccess: (t) => {
+      qc.setQueryData(['trip', id], t)
+      qc.invalidateQueries({ queryKey: ['photos', id] })
+      qc.invalidateQueries({ queryKey: ['highlights', id] })
+    },
+  })
+
+  // --- Story stops (highlights) ---------------------------------------------------------
+  const highlightsQuery = useQuery({
+    queryKey: ['highlights', id],
+    queryFn: () => api.get<Highlight[]>(`/api/trips/${id}/highlights`),
+    enabled: !!trip,
+  })
+  const highlights = highlightsQuery.data ?? []
+  const [editingStop, setEditingStop] = useState<string | null>(null)
+  const [stopToDelete, setStopToDelete] = useState<Highlight | null>(null)
+  const scrollToStop = (stopId: string) =>
+    requestAnimationFrame(() =>
+      document
+        .getElementById(`stop-${stopId}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }),
+    )
+  const saveStop = useMutation({
+    mutationFn: ({ target, input }: { target: string; input: HighlightInput }) =>
+      target === 'new'
+        ? api.post<Highlight>(`/api/trips/${id}/highlights`, input)
+        : api.patch<Highlight>(`/api/highlights/${target}`, input),
+    onSuccess: async (saved) => {
+      // A new stop is slotted in by route position, and photos may have moved between
+      // stops: reload the story, then let the stops glide to their places.
+      const list = await api.get<Highlight[]>(`/api/trips/${id}/highlights`)
+      withViewTransition(() => {
+        qc.setQueryData(['highlights', id], list)
+        setEditingStop(null)
+      })
+      qc.invalidateQueries({ queryKey: ['photos', id] })
+      scrollToStop(saved.id)
+    },
+  })
+  const deleteStop = useMutation({
+    mutationFn: (h: Highlight) => api.delete(`/api/highlights/${h.id}`),
+    onSuccess: (_, h) => {
+      setStopToDelete(null)
+      withViewTransition(() =>
+        qc.setQueryData<Highlight[]>(['highlights', id], (old) =>
+          old?.filter((x) => x.id !== h.id),
+        ),
+      )
+      qc.invalidateQueries({ queryKey: ['photos', id] })
+    },
+  })
+  const reorderStops = useMutation({
+    mutationFn: (ids: string[]) =>
+      api.post<Highlight[]>(`/api/trips/${id}/highlights/order`, { ids }),
+    onSuccess: (list) => qc.setQueryData(['highlights', id], list),
+    onError: () => qc.invalidateQueries({ queryKey: ['highlights', id] }),
+  })
+  const moveStop = (h: Highlight, by: -1 | 1) => {
+    const list = [...highlights]
+    const i = list.findIndex((x) => x.id === h.id)
+    const j = i + by
+    if (i < 0 || j < 0 || j >= list.length) return
+    ;[list[i], list[j]] = [list[j], list[i]]
+    // Move it on screen at once; the server confirms the new order in the background.
+    withViewTransition(() => qc.setQueryData(['highlights', id], list))
+    reorderStops.mutate(list.map((x) => x.id))
+    scrollToStop(h.id)
+  }
+  const saveStopError =
+    saveStop.error instanceof ApiError
+      ? (Object.values(saveStop.error.fields ?? {})[0]?.[0] ?? saveStop.error.message)
+      : saveStop.error
+        ? "Couldn't save this stop. Check your connection and try again."
+        : ''
+
   const update = useMutation({
     mutationFn: (body: Partial<Trip>) => api.patch<Trip>(`/api/trips/${id}`, body),
     onSuccess: (t) => qc.setQueryData(['trip', id], t),
@@ -85,8 +221,15 @@ export default function TripPage() {
   const [styleId, setStyleId] = useState<BaseStyleId>(DEFAULT_STYLE)
   const [replacing, setReplacing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
+  const [placing, setPlacing] = useState<Photo | null>(null)
+  const [focus, setFocus] = useState<{ lng: number; lat: number; nonce: number } | null>(null)
+  const [photoToDelete, setPhotoToDelete] = useState<Photo | null>(null)
 
-  if (tripQuery.isLoading) return <p className="p-8 text-moss">Loading your trip…</p>
+  const showMap = () =>
+    mapSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+
+  if (tripQuery.isLoading) return <p className="p-8 text-muted">Loading your trip…</p>
   if (!trip) {
     const notFound = tripQuery.error instanceof ApiError && tripQuery.error.status === 404
     return notFound ? (
@@ -113,89 +256,200 @@ export default function TripPage() {
   const vis = VISIBILITY[trip.visibility]
   const VisIcon = vis.icon
 
+  const mapReady = ready && !!track
+  // Room the route keeps clear of: the title panel (wide screens) and the photo strip.
+  const inset = {
+    left: wide ? 430 : 0,
+    bottom: readyPhotos.some((p) => p.route_fraction != null) ? 90 : 0,
+  }
+
+  // Title, dates, headline numbers and trip controls. Over the map on wider screens; above
+  // it on phones and while there's no map yet.
+  const header = (
+    <div
+      className={
+        mapReady
+          ? 'px-4 pt-5 pb-4 sm:absolute sm:top-4 sm:left-4 sm:z-10 sm:w-[25rem] sm:rounded-3xl sm:p-5 sm:map-panel'
+          : 'mx-auto w-full max-w-6xl px-4 pt-8 pb-6 sm:pt-12'
+      }
+    >
+      <Link to="/trips" className="text-sm font-semibold text-brand hover:underline">
+        My trips
+      </Link>
+      <h1
+        className={`mt-1 font-extrabold tracking-[-0.03em] ${
+          mapReady ? 'text-3xl leading-tight sm:text-[2rem]' : 'text-4xl leading-[1.05] sm:text-6xl'
+        }`}
+      >
+        {trip.title}
+      </h1>
+      {trip.start_date && (
+        <p className="mt-1.5 flex items-center gap-1.5 text-sm text-muted">
+          <CalendarDays className="h-4 w-4" aria-hidden />
+          {formatDateRange(trip.start_date, trip.end_date)}
+        </p>
+      )}
+      {ready && (
+        <div className="mt-4">
+          <StatsStrip stats={trip.stats} variant="lead" />
+        </div>
+      )}
+      <div
+        className={`flex items-center gap-2 text-sm ${mapReady ? 'mt-4 border-t border-line pt-4' : 'mt-6'}`}
+      >
+        <label className="relative flex items-center">
+          <span className="sr-only">Who can see this trip</span>
+          <VisIcon className="pointer-events-none absolute left-3 h-4 w-4 text-brand" aria-hidden />
+          <select
+            id="visibility"
+            value={trip.visibility}
+            onChange={(e) => update.mutate({ visibility: e.target.value as Visibility })}
+            className="h-9 appearance-none rounded-full border border-line bg-card pr-9 pl-9 font-semibold text-ink hover:border-brand/40"
+          >
+            {(Object.keys(VISIBILITY) as Visibility[]).map((v) => (
+              <option key={v} value={v}>
+                {VISIBILITY[v].label}
+              </option>
+            ))}
+          </select>
+          <span className="pointer-events-none absolute right-3.5 text-muted" aria-hidden>
+            ▾
+          </span>
+        </label>
+        <ActionsMenu
+          label="More trip actions"
+          actions={[
+            ...(ready
+              ? [
+                  {
+                    label: replacing ? 'Cancel replacing GPX' : 'Replace GPX file',
+                    icon: FileUp,
+                    onSelect: () => setReplacing((r) => !r),
+                  },
+                ]
+              : []),
+            {
+              label: 'Delete trip',
+              icon: Trash2,
+              danger: true,
+              onSelect: () => setConfirmDelete(true),
+            },
+          ]}
+        />
+      </div>
+      {update.isError ? (
+        <p role="alert" className="mt-3 text-sm font-medium text-danger">
+          Couldn't save that change. Check your connection and try again.
+        </p>
+      ) : (
+        trip.visibility !== 'private' && <p className="mt-3 text-sm text-muted">{vis.help}</p>
+      )}
+    </div>
+  )
+
   return (
-    <div className="flex flex-col pb-16">
-      <header className="mx-auto w-full max-w-6xl px-4 pt-8 pb-4 sm:pt-10">
-        <Link to="/trips" className="text-sm font-semibold text-forest hover:underline">
-          My trips
-        </Link>
-        <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-extrabold tracking-tight sm:text-5xl">{trip.title}</h1>
-            {trip.start_date && (
-              <p className="mt-2 flex items-center gap-1.5 text-moss">
-                <CalendarDays className="h-4 w-4" aria-hidden />
-                {formatDateRange(trip.start_date, trip.end_date)}
-              </p>
+    <div className="pb-16">
+      {mapReady ? (
+        <section ref={mapSectionRef} className="relative scroll-mt-16">
+          {header}
+          {/* The map is the page: full width, nearly a full screen tall. */}
+          <div className="relative h-[62svh] min-h-[420px] bg-wash sm:h-[calc(100svh-4rem)] sm:max-h-[900px] sm:min-h-[580px]">
+            <Suspense fallback={<div className="h-full w-full animate-pulse bg-wash" />}>
+              <TripMap
+                track={track}
+                styleId={styleId}
+                hoverIndex={hoverIndex}
+                onHoverIndex={setHoverIndex}
+                inset={inset}
+                photos={readyPhotos}
+                onPhotoClick={(pid) => setLightboxIndex(readyPhotos.findIndex((p) => p.id === pid))}
+                placing={placing != null}
+                onPlace={(lng, lat) => {
+                  if (placing) patchPhoto.mutate({ photo: placing, body: { location: [lng, lat] } })
+                  setPlacing(null)
+                }}
+                focus={focus}
+              />
+            </Suspense>
+            <div className="absolute top-3 left-3 sm:right-14 sm:left-auto">
+              <StyleSwitcher value={styleId} onChange={setStyleId} />
+            </div>
+            {placing ? (
+              <div className="map-panel absolute bottom-10 left-1/2 flex w-[min(92%,30rem)] -translate-x-1/2 items-center gap-3 rounded-2xl px-4 py-3 text-sm">
+                {placing.thumb_url && (
+                  <img
+                    src={placing.thumb_url}
+                    alt=""
+                    className="h-10 w-12 rounded-md object-cover"
+                  />
+                )}
+                <p className="flex-1 font-semibold">Click the map where this photo was taken.</p>
+                <button onClick={() => setPlacing(null)} className={btn.ghost}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              // Clear of the scale bar (left) and attribution (right) below it.
+              <div className="absolute right-3 bottom-9 left-3 flex justify-center sm:right-12 sm:left-[27rem]">
+                <PhotoStrip
+                  photos={readyPhotos}
+                  onOpen={(p) => setLightboxIndex(readyPhotos.findIndex((x) => x.id === p.id))}
+                  onHover={(f) =>
+                    setHoverIndex(f == null ? null : profileIndexAtFraction(track.profile, f))
+                  }
+                />
+              </div>
             )}
           </div>
-          <div className="flex items-center gap-2 text-sm">
-            <label className="relative flex items-center">
-              <span className="sr-only">Who can see this trip</span>
-              <VisIcon
-                className="pointer-events-none absolute left-3 h-4 w-4 text-forest"
-                aria-hidden
+          {/* Elevation and the remaining numbers, in a band right under the map. */}
+          <div className="border-b border-line bg-card">
+            <div className="mx-auto max-w-6xl px-4 pt-4 pb-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+                <h2 className="flex items-baseline gap-3 font-bold">
+                  Elevation
+                  {hovered ? (
+                    <span className="text-sm font-semibold text-brand tabular-nums">
+                      {formatElevation(hovered[1])} at {formatDistance(hovered[0])}
+                    </span>
+                  ) : (
+                    <span className="hidden text-sm font-normal text-muted sm:inline">
+                      Hover the chart, the route or a photo
+                    </span>
+                  )}
+                </h2>
+                <StatsStrip stats={trip.stats} variant="quiet" />
+              </div>
+              <ElevationChart
+                profile={track.profile}
+                hoverIndex={hoverIndex}
+                onHoverIndex={setHoverIndex}
+                height={CHART_HEIGHT}
               />
-              <select
-                id="visibility"
-                value={trip.visibility}
-                onChange={(e) => update.mutate({ visibility: e.target.value as Visibility })}
-                className="h-10 appearance-none rounded-full border border-line bg-card pr-9 pl-9 font-semibold text-ink shadow-[var(--shadow-soft)] hover:border-forest/40"
-              >
-                {(Object.keys(VISIBILITY) as Visibility[]).map((v) => (
-                  <option key={v} value={v}>
-                    {VISIBILITY[v].label}
-                  </option>
-                ))}
-              </select>
-              <span className="pointer-events-none absolute right-3.5 text-moss" aria-hidden>
-                ▾
-              </span>
-            </label>
-            <ActionsMenu
-              label="More trip actions"
-              actions={[
-                ...(ready
-                  ? [
-                      {
-                        label: replacing ? 'Cancel replacing GPX' : 'Replace GPX file',
-                        icon: FileUp,
-                        onSelect: () => setReplacing((r) => !r),
-                      },
-                    ]
-                  : []),
-                {
-                  label: 'Delete trip',
-                  icon: Trash2,
-                  danger: true,
-                  onSelect: () => setConfirmDelete(true),
-                },
-              ]}
-            />
+              <p className="mt-1 text-xs text-muted">
+                {trip.stats.points_raw?.toLocaleString('en-IN')} GPS points, simplified to{' '}
+                {trip.stats.points_simplified?.toLocaleString('en-IN')} for a fast map.
+                <span className="hidden sm:inline">
+                  {' '}
+                  Hold Ctrl or ⌘ and scroll to zoom the map.
+                </span>
+              </p>
+            </div>
           </div>
-        </div>
-        {update.isError ? (
-          <p role="alert" className="mt-3 text-sm font-medium text-danger">
-            Couldn't save that change. Check your connection and try again.
-          </p>
-        ) : (
-          trip.visibility !== 'private' && <p className="mt-3 text-sm text-moss">{vis.help}</p>
-        )}
-      </header>
-
-      {/* On phones the map comes before the stats; on larger screens the stats lead. */}
-      {ready && (
-        <section className="order-3 mx-auto w-full max-w-6xl px-4 pt-6 sm:order-2 sm:pt-2 sm:pb-6">
-          <StatsStrip stats={trip.stats} />
         </section>
+      ) : (
+        <header>{header}</header>
       )}
 
-      <section className="order-4 mx-auto w-full max-w-6xl px-4">
+      {ready && !track && (
+        <div className="h-[62svh] min-h-[420px] animate-pulse bg-wash sm:h-[calc(100svh-4rem)] sm:max-h-[900px]" />
+      )}
+
+      <section className="mx-auto w-full max-w-6xl px-4">
         {trip.status === 'processing' && (
           <div className="rounded-3xl border border-line bg-card p-10 text-center shadow-[var(--shadow-soft)]">
-            <div className="mx-auto h-9 w-9 animate-spin rounded-full border-[3px] border-forest border-t-transparent" />
+            <div className="mx-auto h-9 w-9 animate-spin rounded-full border-[3px] border-brand border-t-transparent" />
             <p className="mt-4 text-xl font-bold">Reading your track…</p>
-            <p className="mt-1 text-moss">Working out distance, climb and time.</p>
+            <p className="mt-1 text-muted">Working out distance, time and elevation.</p>
           </div>
         )}
         {trip.status === 'failed' && (
@@ -205,59 +459,129 @@ export default function TripPage() {
           </div>
         )}
         {(trip.status === 'draft' || trip.status === 'failed' || replacing) && (
-          <div className={replacing ? 'mt-6' : ''}>
+          <div className={replacing ? 'mt-8' : ''}>
             <GpxUpload trip={trip} />
           </div>
         )}
       </section>
 
-      {ready && track && (
-        <section className="order-2 mx-auto w-full max-w-6xl px-4 sm:order-3">
-          <div className="relative h-[62vh] min-h-[440px] overflow-hidden rounded-3xl border border-line bg-lichen shadow-[var(--shadow-soft)] sm:h-[68vh]">
-            <Suspense fallback={<div className="h-full w-full animate-pulse bg-lichen" />}>
-              <TripMap
-                track={track}
-                styleId={styleId}
-                hoverIndex={hoverIndex}
-                onHoverIndex={setHoverIndex}
-                bottomInset={CHART_INSET}
+      {ready && (
+        <StoryThread
+          trip={trip}
+          highlights={highlights}
+          photos={readyPhotos}
+          profile={track?.profile}
+          editing={editingStop}
+          saving={saveStop.isPending}
+          error={saveStopError}
+          onEdit={(target) => {
+            saveStop.reset()
+            setEditingStop(target)
+          }}
+          onSave={(input) => editingStop && saveStop.mutate({ target: editingStop, input })}
+          onDelete={setStopToDelete}
+          onMove={moveStop}
+          onOpenPhoto={(p) => setLightboxIndex(readyPhotos.findIndex((x) => x.id === p.id))}
+          onShowOnMap={(h) => {
+            const spots = h.photo_ids
+              .map((pid) => readyPhotos.find((p) => p.id === pid)?.location)
+              .filter((l) => l != null)
+            if (!spots.length) return
+            const lng = spots.reduce((t, l) => t + l[0], 0) / spots.length
+            const lat = spots.reduce((t, l) => t + l[1], 0) / spots.length
+            setFocus({ lng, lat, nonce: Date.now() })
+            showMap()
+          }}
+        />
+      )}
+      {(deleteStop.isError || reorderStops.isError) && (
+        <p role="alert" className="mx-auto mt-4 max-w-6xl px-4 text-sm font-medium text-danger">
+          Couldn't save that change to the story. Check your connection and try again.
+        </p>
+      )}
+
+      {trip.status !== 'processing' && (
+        <section className="mx-auto mt-16 w-full max-w-6xl space-y-6 px-4">
+          <div
+            className={`grid gap-4 ${ready && readyPhotos.length ? 'lg:grid-cols-[1fr_22rem]' : ''}`}
+          >
+            <PhotoUpload tripId={trip.id} />
+            {ready && readyPhotos.length > 0 && (
+              <CameraOffset
+                key={trip.camera_offset_s}
+                value={trip.camera_offset_s}
+                saving={offset.isPending}
+                onChange={(s) => offset.mutate(s)}
+                timeMatched={readyPhotos.filter((p) => p.placement === 'time').length}
               />
-            </Suspense>
-            <div className="absolute top-3 left-3">
-              <StyleSwitcher value={styleId} onChange={setStyleId} />
-            </div>
-            {/* Sits above a 40px strip so the map's scale bar and attribution stay visible. */}
-            <div className="map-panel absolute inset-x-3 bottom-10 rounded-2xl px-3 pt-2.5 pb-1">
-              <div className="flex h-5 items-center justify-between px-1 text-sm">
-                <span className="font-semibold">Elevation</span>
-                {hovered ? (
-                  <span className="font-semibold text-forest tabular-nums">
-                    {formatDistance(hovered[0])} in, at {formatElevation(hovered[1])}
-                  </span>
-                ) : (
-                  <span className="hidden text-moss sm:inline">Hover to explore the climb</span>
-                )}
-              </div>
-              <ElevationChart
-                profile={track.profile}
-                hoverIndex={hoverIndex}
-                onHoverIndex={setHoverIndex}
-                height={CHART_HEIGHT}
-              />
-            </div>
+            )}
           </div>
-          <p className="mt-3 text-sm text-moss">
-            {trip.stats.points_raw?.toLocaleString('en-IN')} GPS points, simplified to{' '}
-            {trip.stats.points_simplified?.toLocaleString('en-IN')} for a fast map.
-            <span className="hidden sm:inline"> Hold Ctrl or ⌘ and scroll to zoom.</span>
-          </p>
+          {(patchPhoto.isError || bulk.isError || deletePhoto.isError || offset.isError) && (
+            <p role="alert" className="text-sm font-medium text-danger">
+              Couldn't save that photo change. Check your connection and try again.
+            </p>
+          )}
+          {photos.length > 0 && (
+            <PhotoGrid
+              photos={photos}
+              canPlace={ready && !!track}
+              placingId={placing?.id ?? null}
+              bulkBusy={bulk.isPending}
+              onOpen={(p) => setLightboxIndex(readyPhotos.findIndex((x) => x.id === p.id))}
+              onPatch={(photo, body) => patchPhoto.mutate({ photo, body })}
+              onBulk={(isPublic) => bulk.mutate(isPublic)}
+              onStartPlacing={(p) => {
+                setPlacing(p)
+                showMap()
+              }}
+              onDelete={setPhotoToDelete}
+            />
+          )}
         </section>
       )}
+
+      <Lightbox
+        photos={readyPhotos}
+        index={lightboxIndex != null && lightboxIndex >= 0 ? lightboxIndex : null}
+        onIndex={setLightboxIndex}
+        timeZone={trip.timezone}
+        onShowOnMap={
+          track
+            ? (p) => {
+                setLightboxIndex(null)
+                setFocus({ lng: p.location![0], lat: p.location![1], nonce: Date.now() })
+                showMap()
+              }
+            : undefined
+        }
+      />
+
+      <ConfirmDialog
+        open={stopToDelete != null}
+        title="Delete this stop?"
+        body={`“${stopToDelete?.label ?? ''}” and its words will be removed from the story. Its photos stay in the trip.`}
+        confirmLabel="Delete stop"
+        busyLabel="Deleting…"
+        busy={deleteStop.isPending}
+        onConfirm={() => stopToDelete && deleteStop.mutate(stopToDelete)}
+        onClose={() => setStopToDelete(null)}
+      />
+
+      <ConfirmDialog
+        open={photoToDelete != null}
+        title="Delete this photo?"
+        body={`“${photoToDelete?.filename ?? ''}” will be removed from this trip. Your original stays on your device.`}
+        confirmLabel="Delete photo"
+        busyLabel="Deleting…"
+        busy={deletePhoto.isPending}
+        onConfirm={() => photoToDelete && deletePhoto.mutate(photoToDelete)}
+        onClose={() => setPhotoToDelete(null)}
+      />
 
       <ConfirmDialog
         open={confirmDelete}
         title="Delete this trip?"
-        body={`“${trip.title}” and its GPS track will be permanently deleted. This can't be undone.`}
+        body={`“${trip.title}”, its GPS track and its photos will be permanently deleted. This can't be undone.`}
         confirmLabel="Delete trip"
         busyLabel="Deleting…"
         busy={remove.isPending}
