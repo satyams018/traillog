@@ -41,7 +41,7 @@ TrailLog turns a trek or trip into a story you can share. Upload a GPX track and
 | F6 | **Photo clusters + gallery** | Markers cluster when zoomed out. A full-screen lightbox supports swipe, keyboard and "show on map". |
 | F7 | **Flythrough** | The camera follows the route with play/pause, 1×/2×/4× speed and a scrubber. Photos and highlights open as the camera passes them. Runs at ≥ 30 fps on a mid-range Android phone. |
 | F8 | **Elevation chart** | Synced both ways: hovering or scrubbing the chart moves a marker on the map, and hovering the route highlights the chart. Shows the flythrough position during playback. |
-| F9 | **Story editor** | Edit the title, description, cover photo and captions. Choose which photos are public with a per-photo toggle, **multi-select, and one-click "Show all / Hide all"** for the whole trip (photos are public by default; the trip itself is private until shared). Add highlights (label, type: summit/camp/viewpoint/other, position on route, optional photo). For the MVP the editor is a simple tabbed form next to the map; the polished split view and **journal bodies** (Markdown) come in v1.0.1. Changes are saved with a Save button (autosave comes later). |
+| F9 | **Story editor** | Edit the title, description, cover photo and captions. Choose which photos are public with a per-photo toggle, **multi-select, and one-click "Show all / Hide all"** for the whole trip (photos are public by default; the trip itself is private until shared). Add highlights (label, type: sight/viewpoint/food/stay/camp/summit/other, notes, and any number of the trip's photos; ADR-32). For the MVP the editor is a simple tabbed form next to the map; the polished split view and **journal bodies** (Markdown) come in v1.0.1. Changes are saved with a Save button (autosave comes later). |
 | F10 | **Share page** | `/u/<username>/<slug>` opens without login. Django renders the meta tags (`og:*`, `twitter:card`) and an auto-generated 1200×630 preview image (ADR-12, ADR-15). Visibility is Private / Link / Public (§8). |
 | F11 | **Privacy** | Public photo files never contain EXIF. A privacy zone hides the first and last X m of the route (default 300 m). New trips are private (§8). |
 
@@ -66,7 +66,7 @@ TrailLog turns a trek or trip into a story you can share. Upload a GPX track and
 | Backend | Python 3.12, Django 5 + DRF + GeoDjango, `django-allauth` (headless mode) for email and Google login |
 | Database | PostgreSQL 16 + PostGIS 3 (ADR-2) |
 | Jobs | Celery + Redis 7 (`redis:7-alpine` container, same image locally and in prod) (ADR-6) |
-| GPX / photos | `gpxpy`, Pillow + `pillow-heif`, `exifread`, `timezonefinder` |
+| GPX / photos | `gpxpy`, Pillow + `pillow-heif` (Pillow also reads EXIF, ADR-28), `timezonefinder` |
 | Storage | S3 API via `boto3`. SeaweedFS locally (ADR-23), Cloudflare R2 in prod. Private bucket (ADR-14) |
 | Frontend | React 19 + TypeScript + Vite, React Router, TanStack Query, Tailwind CSS 4, lucide-react icons |
 | Map | MapLibre GL JS, AWS Terrain Tiles (Terrarium) for 3D, MapTiler for base styles (ADR-17), Turf.js |
@@ -165,9 +165,10 @@ Photo
   location PointZ (nullable), placement [exif|time|manual|unplaced], route_fraction float (nullable)
   caption, is_public (default true; only applies once the trip is shared), order, created_at
 
-Highlight
-  id, trip→Trip, kind [summit|camp|viewpoint|other], label, body (Markdown, journal entry; field added now, editable from v1.0.1)
-  route_fraction float 0–1, photo→Photo (nullable), created_at
+Highlight (a story stop, ADR-32)
+  id, trip→Trip, kind [sight|viewpoint|food|stay|camp|summit|other], label, body (plain paragraphs now; Markdown later), order, created_at
+  photos: Photo.highlight→Highlight (nullable), so a stop has many photos and a photo is in at most one stop
+  route_fraction: worked out from its photos (the middle of the placed ones), not stored
 ```
 
 **v1.1:** `Chapter(trip, day_no, title, notes, start_fraction, end_fraction, date)`, `Place(trip, order, name, point, date, note)`, `Comment(id, author, trip, photo?, body ≤ 1000, created_at, deleted_at)`, `Like(user, trip?, photo?)` with exactly one target set (check constraint) and a unique (user, target) pair, `BudgetItem(trip, category, label, amount_inr, per_person)`, `TransportLeg(trip, order, mode, from_name, to_name, duration_min, cost_inr, notes)`.
@@ -209,6 +210,7 @@ All under `/api/`, JSON, session auth + CSRF. Errors use the shape `{"error": {"
 | PATCH / DELETE | `/api/photos/{id}` | Caption, is_public, order, manual `location` or `route_fraction` |
 | GET / POST | `/api/trips/{id}/highlights` | List / create |
 | PATCH / DELETE | `/api/highlights/{id}` | Edit / remove |
+| POST | `/api/trips/{id}/highlights/order` | Reorder the story (`ids`: every highlight once) |
 | GET | `/api/public/u/{username}/{slug}?k=` | Public story payload (§8) |
 
 **Non-API Django routes:** `GET /u/{username}/{slug}` (SPA shell + meta tags), `GET /og/{trip_id}.png` (302 redirect to a fresh presigned URL of the latest OG image).
@@ -221,11 +223,12 @@ All under `/api/`, JSON, session auth + CSRF. Errors use the shape `{"error": {"
 
 **Routes:** `/` landing (a demo trip playing the flythrough as the hero) · `/login` · `/signup` · `/trips` my trips · `/trips/new` upload wizard (GPX → photos → offset check) · `/trips/:id/edit` editor · `/u/:user/:slug` story · `/u/:user` profile (v1.1) · `/explore` (v1.2).
 
-**Look & feel: light & outdoorsy** (revised 2026-11-22 after user feedback that the dark theme felt low-contrast and plain; ADR-27)
-- **Palette:** paper `#F6F7F2` background, white cards, forest `#1F5C3F` for primary actions, trail-blaze orange `#F07C1E` for the route and accents (`#A34D07` for orange text), ink `#16241D` / moss `#56655C` text. Every text pair passes WCAG AA.
+**Look & feel: a travel journal on a map** (revised 2026-11-23 so the site suits any trip, not only treks; ADR-33, replacing the outdoorsy palette of ADR-27)
+- **Palette:** cool map-paper `#F4F6F9` background, white cards, atlas blue `#2449C8` for actions, links and the route's start, highlighter raspberry `#E33A6E` for the route, your place on it and progress (`#A9184B` for raspberry text), ink `#131C2E` / muted `#556074` text, wash `#E7EDF6` for tinted surfaces. Every text pair passes WCAG AA. Map and chart colours come from `lib/palette.ts`.
+- **Any kind of trip:** copy says "trip", not "trek". Climb and highest point show only for hilly trips (≥ 150 m of climbing); otherwise distance, time and average speed lead. Story stops can be a sight, viewpoint, food & drink, stay, camp, summit or other.
 - **Type:** Plus Jakarta Sans throughout, sentence-case labels, tabular numbers for stats.
-- **Signature:** topographic contour lines (generated SVG) behind the hero, auth card and route previews. The orange route is drawn over them, the same colour as on the 3D map.
-- **Trip page:** stat tiles with icons. Topo base map by default (Light/Dark available, Satellite with a MapTiler key). A frosted white chart panel above a strip that keeps the scale bar and map credits visible. On phones the map comes first.
+- **Signature:** the 3D map itself (ADR-31). The landing hero is a live, slowly turning map of a real sample trip (a trek, labelled as an example); the trip page opens on a full-width map. A small elevation ridge closes each hilly trip's card (ADR-30). Topographic contour lines stay as the texture behind the map's loading state and the auth card.
+- **Trip page:** a full-width map nearly a screen tall. A frosted panel over it holds the title, dates, distance / time (and climb, for hilly trips) in large numerals, and the trip controls; on phones that panel sits above the map. Photos run along the map's bottom edge in route order (hover one to see where it was taken). The elevation chart and the times sit in a band under the map. Topo base map by default (Light/Dark available, Satellite with a MapTiler key).
 - **Motion:** respects `prefers-reduced-motion`. **Accessibility:** visible focus rings, keyboard-operable player, menu and dialogs, AA contrast.
 
 **Flythrough:** precompute the route length with Turf. On each `requestAnimationFrame`, move the distance d forward by speed × Δt, find the point at d (`along`) and a look-ahead point ~300 m further, and set the camera with `FreeCameraOptions` (position behind and above, bearing toward the look-ahead point). Photos or highlights whose `route_fraction` is crossed open in a side card. The flythrough pauses while the tab is hidden.
@@ -264,7 +267,7 @@ Claude writes most of the code; you review each piece, test it with your own GPX
 |---|---|---|
 | **Accounts** (you, ~1 h) | GitHub repo, Fly.io (card + spending alert), Neon (enable PostGIS), Cloudflare R2 (bucket + API token + CORS), MapTiler key. Gather 1–2 real GPX files with matching photos | All keys are in a local `.env` |
 | **Tracks & 3D map** ✅ | Repo, Compose (postgis/redis/SeaweedFS), CI, lint/format. Django + DRF + GeoDjango, email auth, Trip CRUD, GPX upload, `process_gpx` (stats, smoothing, simplify, profile). React app, 3D terrain map with route, elevation chart synced both ways, style switcher, light outdoorsy design | A real trek GPX shows the correct route, stats and synced chart on 3D terrain |
-| **Photos & flythrough** | Presigned photo uploads + quota, `process_photo` (EXIF → DB, WebP copies, delete original), placement (EXIF → time-match → manual), camera-offset slider, photo markers + clusters + lightbox, flythrough with photo pop-ups | Photos from a real trip land in the right places and pop up during the flythrough |
+| **Photos & flythrough** (photos ✅, flythrough next) | Presigned photo uploads + quota, `process_photo` (EXIF → DB, WebP copies, delete original), placement (EXIF → time-match → manual), camera-offset slider, photo markers + clusters + lightbox, flythrough with photo pop-ups | Photos from a real trip land in the right places and pop up during the flythrough |
 | **Story, sharing & deploy** | Story editor (simple form), highlights, Show all / Hide all, share token, privacy zones (`build_public_track`), share page + meta tags + OG image, deploy to Fly, smoke test on a phone, README (screenshots, GIF, metrics) | A share link from the live URL previews on WhatsApp and replays the trek on a phone |
 | **v1.0.1** | Google sign-in, journal bodies, Playwright E2E, editor polish, demo video, onboard the trek club, real-usage metrics | — |
 
