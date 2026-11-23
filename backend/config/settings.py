@@ -142,7 +142,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "config.pagination.CreatedAtCursorPagination",
     "PAGE_SIZE": 20,
     "EXCEPTION_HANDLER": "config.exceptions.api_exception_handler",
-    "DEFAULT_THROTTLE_RATES": {"upload": "20/min"},
+    "DEFAULT_THROTTLE_RATES": {"upload": "20/min", "presign": "20/min"},
 }
 
 # --- Celery (ADR-6) ---
@@ -164,6 +164,11 @@ S3_REGION = env("S3_REGION", default="auto")
 # --- Upload limits (SPEC §9) ---
 GPX_MAX_BYTES = 20 * 1024 * 1024
 GPX_MAX_POINTS = 200_000
+PHOTO_MAX_BYTES = 25 * 1024 * 1024
+PHOTO_MAX_PER_TRIP = 300
+PHOTO_PRESIGN_BATCH = 50
+# Stored WebP copies are ~5% of a phone JPEG/HEIC; used to refuse uploads over quota early.
+PHOTO_STORED_RATIO = 0.05
 DATA_UPLOAD_MAX_MEMORY_SIZE = 2_621_440  # files above 2.5 MB stream to a temp file
 
 LOGGING = {
