@@ -132,3 +132,14 @@ body {
   animation-duration: 0.35s;
   animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+
+/* Replay cards pop in from below as the camera passes a photo or stop. */
+.replay-card {
+  animation: replay-card-in 0.45s cubic-bezier(0.2, 0.9, 0.25, 1.2) both;
+}
+@keyframes replay-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.94);
+  }
+}

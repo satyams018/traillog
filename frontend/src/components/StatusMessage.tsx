@@ -9,10 +9,13 @@ export default function StatusMessage({
   title,
   body,
   action,
+  showTripsLink = true,
 }: {
   title: string
   body: string
   action?: ReactNode
+  /** Off on public pages, where the visitor may not have an account. */
+  showTripsLink?: boolean
 }) {
   return (
     <div className="mx-auto max-w-md px-4 py-24 text-center">
@@ -23,9 +26,11 @@ export default function StatusMessage({
       <p className="mt-3 text-muted">{body}</p>
       <div className="mt-8 flex justify-center gap-3">
         {action}
-        <Link to="/trips" className={btn.secondary}>
-          Back to my trips
-        </Link>
+        {showTripsLink && (
+          <Link to="/trips" className={btn.secondary}>
+            Back to my trips
+          </Link>
+        )}
       </div>
     </div>
   )
