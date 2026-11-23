@@ -233,3 +233,20 @@ def test_trip_has_small_elevation_preview(client, django_capture_on_commit_callb
     assert len(eles) == 48
     assert eles == sorted(eles)  # the synthetic track climbs steadily
     assert client.get("/api/trips").data["results"][0]["elevation_preview"] == eles
+
+
+def test_totals_add_up_ready_trips(client, django_capture_on_commit_callbacks):
+    first = create_trip(client, "Walk one")
+    second = create_trip(client, "Walk two")
+    create_trip(client, "Draft, no track")
+    with django_capture_on_commit_callbacks(execute=True):
+        upload(client, first["id"], gpx_xml([make_points(n=20, dele=10.0)]))
+        upload(client, second["id"], gpx_xml([make_points(n=30, dele=10.0)]))
+    data = client.get("/api/trips/totals").data
+    one = client.get(f"/api/trips/{first['id']}").data["stats"]
+    two = client.get(f"/api/trips/{second['id']}").data["stats"]
+    assert data["trips"] == 2  # the draft isn't counted
+    assert data["distance_m"] == pytest.approx(one["distance_m"] + two["distance_m"], abs=0.2)
+    assert data["gain_m"] == one["gain_m"] + two["gain_m"]
+    assert data["highest_m"] == max(one["max_ele_m"], two["max_ele_m"])
+    assert data["days"] == 2 and data["photos"] == 0

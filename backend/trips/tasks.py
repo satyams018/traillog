@@ -18,6 +18,7 @@ from core import storage
 from .gpx import GpxError, analyse, build_profile, parse_gpx
 from .models import Photo, Track, Trip
 from .photos import PhotoError, make_copies, place, sniff_type
+from .public import build_public_track
 
 log = logging.getLogger(__name__)
 
@@ -128,6 +129,8 @@ def process_gpx(self, trip_id: str) -> None:
     )
     # Photos uploaded before (or with) this track can now be matched to it.
     match_photos(trip_id)
+    trip.track = track
+    build_public_track(trip)
 
 
 # --- Photos -------------------------------------------------------------------------------

@@ -18,14 +18,16 @@ interface Props {
   /** Ready photos of the trip. */
   photos: Photo[]
   profile?: ProfileRow[]
+  /** Share pages: no editing controls, and nothing at all when there are no stops. */
+  readOnly?: boolean
   /** 'new', a highlight id, or null. */
-  editing: string | null
-  saving: boolean
-  error: string
-  onEdit: (id: string | null) => void
-  onSave: (input: HighlightInput) => void
-  onDelete: (h: Highlight) => void
-  onMove: (h: Highlight, by: -1 | 1) => void
+  editing?: string | null
+  saving?: boolean
+  error?: string
+  onEdit?: (id: string | null) => void
+  onSave?: (input: HighlightInput) => void
+  onDelete?: (h: Highlight) => void
+  onMove?: (h: Highlight, by: -1 | 1) => void
   onOpenPhoto: (p: Photo) => void
   onShowOnMap: (h: Highlight) => void
 }
@@ -51,13 +53,14 @@ export default function StoryThread({
   highlights,
   photos,
   profile,
-  editing,
-  saving,
-  error,
-  onEdit,
-  onSave,
-  onDelete,
-  onMove,
+  readOnly = false,
+  editing = null,
+  saving = false,
+  error = '',
+  onEdit = () => {},
+  onSave = () => {},
+  onDelete = () => {},
+  onMove = () => {},
   onOpenPhoto,
   onShowOnMap,
 }: Props) {
@@ -124,6 +127,7 @@ export default function StoryThread({
   )
 
   const empty = highlights.length === 0
+  if (readOnly && empty) return null
   return (
     <section aria-labelledby="story-title" className="mx-auto mt-16 w-full max-w-6xl px-4">
       <div className="flex flex-wrap items-end justify-between gap-4">
@@ -134,10 +138,10 @@ export default function StoryThread({
           <p className="mt-1 max-w-xl text-muted">
             {empty
               ? 'Optional: group your photos into stops along the route and add a few words to each.'
-              : 'From the trailhead to the finish, stop by stop.'}
+              : 'From start to finish, stop by stop.'}
           </p>
         </div>
-        {!empty && editing !== 'new' && (
+        {!readOnly && !empty && editing !== 'new' && (
           <button onClick={() => onEdit('new')} className={btn.secondary}>
             <Plus className="h-4 w-4" aria-hidden />
             Add a stop
@@ -219,52 +223,54 @@ export default function StoryThread({
                         </div>
                         <div className="flex shrink-0 items-center gap-1">
                           {h.route_fraction != null && (
-                            <span className="hidden sm:block">
+                            <span className={readOnly ? '' : 'hidden sm:block'}>
                               <button onClick={() => onShowOnMap(h)} className={btn.ghost}>
                                 <MapPinned className="h-4 w-4" aria-hidden />
                                 Show on map
                               </button>
                             </span>
                           )}
-                          <ActionsMenu
-                            label={`Actions for ${h.label}`}
-                            actions={[
-                              { label: 'Edit stop', icon: Pencil, onSelect: () => onEdit(h.id) },
-                              ...(i > 0
-                                ? [
-                                    {
-                                      label: 'Move up',
-                                      icon: ArrowUp,
-                                      onSelect: () => onMove(h, -1),
-                                    },
-                                  ]
-                                : []),
-                              ...(i < highlights.length - 1
-                                ? [
-                                    {
-                                      label: 'Move down',
-                                      icon: ArrowDown,
-                                      onSelect: () => onMove(h, 1),
-                                    },
-                                  ]
-                                : []),
-                              ...(h.route_fraction != null
-                                ? [
-                                    {
-                                      label: 'Show on map',
-                                      icon: MapPinned,
-                                      onSelect: () => onShowOnMap(h),
-                                    },
-                                  ]
-                                : []),
-                              {
-                                label: 'Delete stop',
-                                icon: Trash2,
-                                danger: true,
-                                onSelect: () => onDelete(h),
-                              },
-                            ]}
-                          />
+                          {!readOnly && (
+                            <ActionsMenu
+                              label={`Actions for ${h.label}`}
+                              actions={[
+                                { label: 'Edit stop', icon: Pencil, onSelect: () => onEdit(h.id) },
+                                ...(i > 0
+                                  ? [
+                                      {
+                                        label: 'Move up',
+                                        icon: ArrowUp,
+                                        onSelect: () => onMove(h, -1),
+                                      },
+                                    ]
+                                  : []),
+                                ...(i < highlights.length - 1
+                                  ? [
+                                      {
+                                        label: 'Move down',
+                                        icon: ArrowDown,
+                                        onSelect: () => onMove(h, 1),
+                                      },
+                                    ]
+                                  : []),
+                                ...(h.route_fraction != null
+                                  ? [
+                                      {
+                                        label: 'Show on map',
+                                        icon: MapPinned,
+                                        onSelect: () => onShowOnMap(h),
+                                      },
+                                    ]
+                                  : []),
+                                {
+                                  label: 'Delete stop',
+                                  icon: Trash2,
+                                  danger: true,
+                                  onSelect: () => onDelete(h),
+                                },
+                              ]}
+                            />
+                          )}
                         </div>
                       </div>
                       {h.body && (
@@ -294,7 +300,7 @@ export default function StoryThread({
                           ))}
                         </div>
                       )}
-                      {!h.body && shots.length === 0 && (
+                      {!readOnly && !h.body && shots.length === 0 && (
                         <button onClick={() => onEdit(h.id)} className={`${btn.ghost} mt-2 -ml-3`}>
                           <Pencil className="h-4 w-4" aria-hidden />
                           Add words or photos

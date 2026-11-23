@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarDays, FileUp, Globe, Link2, Lock, Trash2 } from 'lucide-react'
-import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { CalendarDays, FileUp, Share2, Trash2 } from 'lucide-react'
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
 import ActionsMenu from '../components/ActionsMenu'
@@ -12,18 +12,24 @@ import Lightbox from '../components/Lightbox'
 import PhotoGrid from '../components/PhotoGrid'
 import PhotoStrip from '../components/PhotoStrip'
 import PhotoUpload from '../components/PhotoUpload'
+import { PlayButton, ReplayOverlay } from '../components/ReplayControls'
+import ShareDialog from '../components/ShareDialog'
 import StatsStrip from '../components/StatsStrip'
 import StatusMessage from '../components/StatusMessage'
 import StoryThread from '../components/StoryThread'
 import StyleSwitcher from '../components/StyleSwitcher'
 import { btn } from '../components/ui'
 import { ApiError, api } from '../lib/api'
+import { useSession } from '../lib/auth'
 import { formatDateRange, formatDistance, formatElevation } from '../lib/format'
 import { type BaseStyleId, DEFAULT_STYLE } from '../lib/mapStyles'
 import { profileIndexAtFraction } from '../lib/profile'
-import type { Highlight, HighlightInput, Photo, TrackData, Trip, Visibility } from '../lib/types'
+import { mapStops } from '../lib/stops'
+import type { Highlight, HighlightInput, Photo, TrackData, Trip } from '../lib/types'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { useMediaQuery } from '../lib/useMediaQuery'
+import { useReplay } from '../lib/useReplay'
+import { VISIBILITY } from '../lib/visibility'
 import { withViewTransition } from '../lib/viewTransition'
 
 // MapLibre is large, so it loads only on pages that show a map (SPEC §11).
@@ -32,20 +38,6 @@ const TripMap = lazy(() => import('../components/TripMap'))
 const POLL_MS = 2000
 const POLL_LIMIT_MS = 2 * 60 * 1000
 const CHART_HEIGHT = 120
-
-const VISIBILITY: Record<Visibility, { label: string; icon: typeof Lock; help: string }> = {
-  private: { label: 'Private', icon: Lock, help: 'Only you can see this trip.' },
-  link: {
-    label: 'Anyone with the link',
-    icon: Link2,
-    help: 'Share pages are coming in the next update. Until then, only you can see this trip.',
-  },
-  public: {
-    label: 'Public',
-    icon: Globe,
-    help: 'Share pages are coming in the next update. Until then, only you can see this trip.',
-  },
-}
 
 export default function TripPage() {
   const { id = '' } = useParams()
@@ -94,8 +86,8 @@ export default function TripPage() {
       return Date.now() - photoPollStarted.current < 3 * 60 * 1000 ? POLL_MS : false
     },
   })
-  const photos = photosQuery.data ?? []
-  const readyPhotos = photos.filter((p) => p.status === 'ready')
+  const photos = useMemo(() => photosQuery.data ?? [], [photosQuery.data])
+  const readyPhotos = useMemo(() => photos.filter((p) => p.status === 'ready'), [photos])
   // Stored bytes are counted when processing finishes, after the upload itself: refresh
   // the storage bar whenever that total changes.
   const storedBytes = readyPhotos.reduce((sum, p) => sum + p.stored_bytes, 0)
@@ -143,7 +135,7 @@ export default function TripPage() {
     queryFn: () => api.get<Highlight[]>(`/api/trips/${id}/highlights`),
     enabled: !!trip,
   })
-  const highlights = highlightsQuery.data ?? []
+  const highlights = useMemo(() => highlightsQuery.data ?? [], [highlightsQuery.data])
   const [editingStop, setEditingStop] = useState<string | null>(null)
   const [stopToDelete, setStopToDelete] = useState<Highlight | null>(null)
   const scrollToStop = (stopId: string) =>
@@ -225,6 +217,14 @@ export default function TripPage() {
   const [placing, setPlacing] = useState<Photo | null>(null)
   const [focus, setFocus] = useState<{ lng: number; lat: number; nonce: number } | null>(null)
   const [photoToDelete, setPhotoToDelete] = useState<Photo | null>(null)
+  const [sharing, setSharing] = useState(false)
+  const replay = useReplay()
+  const stopPins = useMemo(() => mapStops(highlights, readyPhotos), [highlights, readyPhotos])
+  const { data: me } = useSession()
+  const newLink = useMutation({
+    mutationFn: () => api.post<Trip>(`/api/trips/${id}/share-token/rotate`),
+    onSuccess: (t) => qc.setQueryData(['trip', id], t),
+  })
 
   const showMap = () =>
     mapSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -251,7 +251,12 @@ export default function TripPage() {
   }
 
   const track = trackQuery.data
-  const hovered = hoverIndex != null && track ? track.profile[hoverIndex] : null
+  // While a replay runs, the elevation chart's cursor follows the camera.
+  const chartIndex =
+    replay.active && track
+      ? profileIndexAtFraction(track.profile, replay.playback.fraction)
+      : hoverIndex
+  const hovered = chartIndex != null && track ? track.profile[chartIndex] : null
   const ready = trip.status === 'ready'
   const vis = VISIBILITY[trip.visibility]
   const VisIcon = vis.icon
@@ -269,7 +274,9 @@ export default function TripPage() {
     <div
       className={
         mapReady
-          ? 'px-4 pt-5 pb-4 sm:absolute sm:top-4 sm:left-4 sm:z-10 sm:w-[25rem] sm:rounded-3xl sm:p-5 sm:map-panel'
+          ? `px-4 pt-5 pb-4 transition-opacity duration-500 sm:absolute sm:top-4 sm:left-4 sm:z-10 sm:w-[25rem] sm:rounded-3xl sm:p-5 sm:map-panel ${
+              replay.active ? 'sm:pointer-events-none sm:opacity-0' : ''
+            }`
           : 'mx-auto w-full max-w-6xl px-4 pt-8 pb-6 sm:pt-12'
       }
     >
@@ -294,28 +301,22 @@ export default function TripPage() {
           <StatsStrip stats={trip.stats} variant="lead" />
         </div>
       )}
+      {mapReady && <PlayButton replay={replay} className="mt-4 w-full py-3" />}
       <div
         className={`flex items-center gap-2 text-sm ${mapReady ? 'mt-4 border-t border-line pt-4' : 'mt-6'}`}
       >
-        <label className="relative flex items-center">
-          <span className="sr-only">Who can see this trip</span>
-          <VisIcon className="pointer-events-none absolute left-3 h-4 w-4 text-brand" aria-hidden />
-          <select
-            id="visibility"
-            value={trip.visibility}
-            onChange={(e) => update.mutate({ visibility: e.target.value as Visibility })}
-            className="h-9 appearance-none rounded-full border border-line bg-card pr-9 pl-9 font-semibold text-ink hover:border-brand/40"
-          >
-            {(Object.keys(VISIBILITY) as Visibility[]).map((v) => (
-              <option key={v} value={v}>
-                {VISIBILITY[v].label}
-              </option>
-            ))}
-          </select>
-          <span className="pointer-events-none absolute right-3.5 text-muted" aria-hidden>
-            ▾
-          </span>
-        </label>
+        <button
+          onClick={() => setSharing(true)}
+          className={`${trip.visibility === 'private' ? btn.primary : btn.secondary} h-9 py-0`}
+          aria-haspopup="dialog"
+        >
+          {trip.visibility === 'private' ? (
+            <Share2 className="h-4 w-4" aria-hidden />
+          ) : (
+            <VisIcon className="h-4 w-4 text-brand" aria-hidden />
+          )}
+          {trip.visibility === 'private' ? 'Share' : vis.label}
+        </button>
         <ActionsMenu
           label="More trip actions"
           actions={[
@@ -337,12 +338,10 @@ export default function TripPage() {
           ]}
         />
       </div>
-      {update.isError ? (
+      {update.isError && !sharing && (
         <p role="alert" className="mt-3 text-sm font-medium text-danger">
           Couldn't save that change. Check your connection and try again.
         </p>
-      ) : (
-        trip.visibility !== 'private' && <p className="mt-3 text-sm text-muted">{vis.help}</p>
       )}
     </div>
   )
@@ -369,12 +368,27 @@ export default function TripPage() {
                   setPlacing(null)
                 }}
                 focus={focus}
+                stops={stopPins}
+                controllerRef={replay.controllerRef}
+                onPlayback={replay.onPlayback}
+                onReach={replay.onReach}
               />
             </Suspense>
             <div className="absolute top-3 left-3 sm:right-14 sm:left-auto">
               <StyleSwitcher value={styleId} onChange={setStyleId} />
             </div>
-            {placing ? (
+            <ReplayOverlay
+              replay={replay}
+              distanceM={trip.stats.distance_m}
+              photos={readyPhotos}
+              highlights={highlights}
+              timeZone={trip.timezone}
+              onOpenPhoto={(p) => {
+                replay.pause()
+                setLightboxIndex(readyPhotos.findIndex((x) => x.id === p.id))
+              }}
+            />
+            {replay.active ? null : placing ? (
               <div className="map-panel absolute bottom-10 left-1/2 flex w-[min(92%,30rem)] -translate-x-1/2 items-center gap-3 rounded-2xl px-4 py-3 text-sm">
                 {placing.thumb_url && (
                   <img
@@ -421,7 +435,7 @@ export default function TripPage() {
               </div>
               <ElevationChart
                 profile={track.profile}
-                hoverIndex={hoverIndex}
+                hoverIndex={chartIndex}
                 onHoverIndex={setHoverIndex}
                 height={CHART_HEIGHT}
               />
@@ -555,6 +569,27 @@ export default function TripPage() {
             : undefined
         }
       />
+
+      {me && (
+        <ShareDialog
+          open={sharing}
+          trip={trip}
+          username={me.username}
+          saving={update.isPending || newLink.isPending}
+          error={
+            update.isError || newLink.isError
+              ? "Couldn't save that change. Check your connection and try again."
+              : ''
+          }
+          onChange={(body) => update.mutate(body)}
+          onNewLink={() => newLink.mutate()}
+          onClose={() => {
+            update.reset()
+            newLink.reset()
+            setSharing(false)
+          }}
+        />
+      )}
 
       <ConfirmDialog
         open={stopToDelete != null}

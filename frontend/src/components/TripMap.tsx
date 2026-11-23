@@ -1,6 +1,7 @@
 import type { Feature, FeatureCollection, Point as GeoPoint } from 'geojson'
 import {
   AttributionControl,
+  type ExpressionSpecification,
   type GeoJSONSource,
   Map as MLMap,
   type MapLayerMouseEvent,
@@ -13,16 +14,36 @@ import {
 // MapLibre builds its worker URL at runtime, which bundlers can't see. Importing the worker
 // with ?worker&url makes Vite bundle it (with its shared chunk) and hand us the final URL.
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  type Ref,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 
-import { cameraBearingForRoute } from '../lib/geo'
+import {
+  PHOTO_HOLD_MS,
+  REPLAY_MS,
+  cumulative,
+  followZoom,
+  lerpAngle,
+  lookAhead,
+  passed,
+  pointAlong,
+} from '../lib/flythrough'
+import { bearingDeg, cameraBearingForRoute } from '../lib/geo'
 import {
   type BaseStyleId,
+  RELIEF_RAMP,
+  hasRelief,
   isDarkStyle,
   MAP_PITCH,
   TERRAIN_EXAGGERATION,
   TERRAIN_SOURCE,
-  styleUrl,
+  styleFor,
 } from '../lib/mapStyles'
 import { nearestProfileIndex } from '../lib/profile'
 import type { Photo, TrackData } from '../lib/types'
@@ -45,11 +66,75 @@ interface Props {
   onPlace?: (lng: number, lat: number) => void
   /** Fly to this photo; `nonce` lets the same photo be focused twice. */
   focus?: { lng: number; lat: number; nonce: number } | null
+  /** Story stops, pinned and labelled on the map. */
+  stops?: MapStop[]
+  /** Flythrough controls for the page (play, pause, seek, speed, exit). */
+  controllerRef?: Ref<FlyController>
+  /** Replay progress along the route (0..1) and play state, about 10 times a second. */
+  onPlayback?: (state: PlaybackState) => void
+  /** The replay just passed a photo or a stop. */
+  onReach?: (item: { kind: 'photo' | 'stop'; id: string }) => void
+}
+
+export interface MapStop {
+  id: string
+  label: string
+  lng: number
+  lat: number
+  /** Position along the route (0..1), for the replay; null if unknown. */
+  fraction: number | null
+}
+
+export interface FlyController {
+  play(): void
+  pause(): void
+  /** Jump the replay camera to a position along the route (0..1). */
+  seek(fraction: number): void
+  setSpeed(speed: number): void
+  /** Leave the replay and return to the overview. */
+  exit(): void
+}
+
+export interface PlaybackState {
+  fraction: number
+  playing: boolean
+  /** Set once when the replay is left (by the viewer, or after reaching the end). */
+  ended?: boolean
 }
 
 type Inset = Partial<Record<'top' | 'bottom' | 'left' | 'right', number>>
 
 const ROUTE_COLOR = PALETTE.route // highlighter raspberry, same as the cards
+const FLY_PITCH = 64
+const UNTRAVELLED = 'rgba(255,255,255,0.9)'
+// The route runs from atlas blue at the start to raspberry at the finish.
+const IDLE_GRADIENT: ExpressionSpecification = [
+  'interpolate',
+  ['linear'],
+  ['line-progress'],
+  0,
+  PALETTE.brand,
+  1,
+  ROUTE_COLOR,
+]
+
+/** During a replay: the travelled part keeps its colours, the rest of the route is white. */
+function progressGradient(fraction: number): ExpressionSpecification {
+  const p = Math.min(0.9998, Math.max(0.0001, fraction))
+  return [
+    'interpolate',
+    ['linear'],
+    ['line-progress'],
+    0,
+    PALETTE.brand,
+    p,
+    ROUTE_COLOR,
+    p + 0.0001,
+    UNTRAVELLED,
+    1,
+    UNTRAVELLED,
+  ]
+}
 
 // Production only: in dev, Vite serves MapLibre unbundled (optimizeDeps.exclude) and its
 // default worker path works, while Vite's dev worker wrapper does not.
@@ -81,14 +166,42 @@ export default function TripMap({
   placing = false,
   onPlace,
   focus,
+  stops = [],
+  controllerRef,
+  onPlayback,
+  onReach,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MLMap | null>(null)
   const [loading, setLoading] = useState(true)
+  // Round photo thumbnails drawn for the map, kept across style switches.
+  const thumbCache = useRef(new Map<string, ImageData>())
   // Keep the latest values for map event handlers without re-binding them.
-  const latest = useRef({ track, onHoverIndex, styleId, photos, onPhotoClick, placing, onPlace })
+  const latest = useRef({
+    track,
+    onHoverIndex,
+    styleId,
+    photos,
+    onPhotoClick,
+    placing,
+    onPlace,
+    stops,
+    onPlayback,
+    onReach,
+  })
   useLayoutEffect(() => {
-    latest.current = { track, onHoverIndex, styleId, photos, onPhotoClick, placing, onPlace }
+    latest.current = {
+      track,
+      onHoverIndex,
+      styleId,
+      photos,
+      onPhotoClick,
+      placing,
+      onPlace,
+      stops,
+      onPlayback,
+      onReach,
+    }
   })
 
   // Create the map once.
@@ -97,7 +210,7 @@ export default function TripMap({
     const [minX, minY, maxX, maxY] = track.bbox
     const map = new MLMap({
       container: containerRef.current,
-      style: styleUrl(styleId),
+      style: styleFor(styleId),
       center: [(minX + maxX) / 2, (minY + maxY) / 2],
       zoom: 10,
       maxPitch: 80,
@@ -130,8 +243,10 @@ export default function TripMap({
 
     // setStyle() wipes custom sources, so overlays are (re)added on every style load.
     map.on('style.load', () => {
-      addOverlays(map, latest.current.track, isDarkStyle(latest.current.styleId))
+      addOverlays(map, latest.current.track, latest.current.styleId)
       ;(map.getSource('photos') as GeoJSONSource).setData(photoFeatures(latest.current.photos))
+      ;(map.getSource('stops') as GeoJSONSource).setData(stopFeatures(latest.current.stops))
+      addPhotoThumbs(map, latest.current.photos, thumbCache.current)
     })
     // Fit once the terrain heights are in (terrain lifts the route, so fitting earlier would
     // over-zoom). Don't wait for 'idle': with a tilted view that waits for every tile out to
@@ -175,6 +290,12 @@ export default function TripMap({
       latest.current.onHoverIndex(null)
     })
 
+    // Thumbnails arrive asynchronously: hold their place so MapLibre doesn't warn meanwhile.
+    map.on('styleimagemissing', (e) => {
+      if (e.id.startsWith('thumb-') && !map.hasImage(e.id))
+        map.addImage(e.id, new ImageData(THUMB_PX, THUMB_PX), { pixelRatio: 2 })
+    })
+
     // Photos: click a marker to open it, click a cluster to zoom into it, hover for a preview.
     const preview = new Popup({ closeButton: false, offset: 14, className: 'photo-popup' })
     map.on('click', (e) => {
@@ -183,7 +304,7 @@ export default function TripMap({
         return
       }
       const [hit] = map.queryRenderedFeatures(e.point, {
-        layers: ['photo-points', 'photo-clusters'],
+        layers: ['photo-thumbs', 'photo-points', 'photo-clusters'],
       })
       if (!hit) return
       if (hit.properties.cluster) {
@@ -199,7 +320,7 @@ export default function TripMap({
         latest.current.onPhotoClick?.(hit.properties.id)
       }
     })
-    for (const layer of ['photo-points', 'photo-clusters']) {
+    for (const layer of ['photo-thumbs', 'photo-points', 'photo-clusters']) {
       map.on('mouseenter', layer, () => {
         if (!latest.current.placing) map.getCanvas().style.cursor = 'pointer'
       })
@@ -208,7 +329,7 @@ export default function TripMap({
         preview.remove()
       })
     }
-    map.on('mousemove', 'photo-points', (e) => {
+    const showPreview = (e: MapLayerMouseEvent) => {
       const f = e.features?.[0]
       if (!f || latest.current.placing) return
       const photo = latest.current.photos.find((p) => p.id === f.properties.id)
@@ -221,7 +342,9 @@ export default function TripMap({
         .setLngLat((f.geometry as GeoPoint).coordinates as [number, number])
         .setDOMContent(img)
         .addTo(map)
-    })
+    }
+    map.on('mousemove', 'photo-points', showPreview)
+    map.on('mousemove', 'photo-thumbs', showPreview)
 
     return () => {
       window.clearTimeout(safety)
@@ -239,15 +362,211 @@ export default function TripMap({
     appliedStyle.current = styleId
     setLoading(true)
     // diff:false forces a full reload so 'style.load' fires and overlays are re-added.
-    map.setStyle(styleUrl(styleId), { diff: false })
+    map.setStyle(styleFor(styleId), { diff: false })
     map.once('style.load', () => setLoading(false))
   }, [styleId])
 
   // Keep photo markers in sync with the photo list.
   useEffect(() => {
-    const src = mapRef.current?.getSource('photos') as GeoJSONSource | undefined
+    const map = mapRef.current
+    const src = map?.getSource('photos') as GeoJSONSource | undefined
     src?.setData(photoFeatures(photos))
+    if (map && src) addPhotoThumbs(map, photos, thumbCache.current)
   }, [photos])
+
+  // Stops change rarely; compare by content so a re-render with a new array is free.
+  const stopsKey = JSON.stringify(stops)
+  useEffect(() => {
+    const src = mapRef.current?.getSource('stops') as GeoJSONSource | undefined
+    src?.setData(stopFeatures(latest.current.stops))
+  }, [stopsKey])
+
+  // --- Flythrough (SPEC F7) -------------------------------------------------------------
+  // The camera follows the route at a tilt, the travelled part lights up, and the replay
+  // holds briefly on each photo. Runs in requestAnimationFrame and writes straight to the
+  // map; the page hears about progress ~10×/s through onPlayback.
+  const fly = useMemo(() => {
+    const coords = track.geometry.coordinates
+    const cum = cumulative(coords)
+    const total = cum[cum.length - 1] || 1
+    const zoom = followZoom(total)
+    const ahead = lookAhead(total)
+    const s = {
+      playing: false,
+      d: 0,
+      speed: 1,
+      last: 0,
+      raf: 0,
+      hold: 0,
+      bearing: 0,
+      reported: 0,
+      saved: null as null | {
+        center: [number, number]
+        zoom: number
+        bearing: number
+        pitch: number
+      },
+    }
+
+    const emit = (force = false) => {
+      const now = performance.now()
+      if (!force && now - s.reported < 100) return
+      s.reported = now
+      latest.current.onPlayback?.({ fraction: s.d / total, playing: s.playing })
+    }
+    const setLook = (map: MLMap, replaying: boolean) => {
+      if (!map.getLayer('route-line')) return
+      map.setPaintProperty(
+        'route-line',
+        'line-gradient',
+        replaying ? progressGradient(s.d / total) : IDLE_GRADIENT,
+      )
+      map.setLayoutProperty('cursor', 'visibility', replaying ? 'none' : 'visible')
+      const pos = pointAlong(coords, cum, s.d)
+      ;(map.getSource('traveller') as GeoJSONSource | undefined)?.setData(
+        replaying
+          ? { type: 'Feature', geometry: { type: 'Point', coordinates: pos }, properties: {} }
+          : emptyCollection(),
+      )
+    }
+    const placeCamera = (map: MLMap, smoothing: number) => {
+      const pos = pointAlong(coords, cum, s.d)
+      if (s.d < total - 1) {
+        const target = bearingDeg(pos, pointAlong(coords, cum, s.d + ahead))
+        s.bearing = lerpAngle(s.bearing, target, smoothing)
+      }
+      map.jumpTo({ center: pos, bearing: s.bearing, pitch: FLY_PITCH, zoom })
+    }
+    const remember = (map: MLMap) => {
+      if (s.saved) return
+      const c = map.getCenter()
+      s.saved = {
+        center: [c.lng, c.lat],
+        zoom: map.getZoom(),
+        bearing: map.getBearing(),
+        pitch: map.getPitch(),
+      }
+    }
+    const marks = (kind: 'photo' | 'stop') =>
+      kind === 'photo'
+        ? latest.current.photos
+            .filter((p) => p.route_fraction != null && p.location)
+            .map((p) => ({ id: p.id, fraction: p.route_fraction! }))
+        : latest.current.stops
+            .filter((x) => x.fraction != null)
+            .map((x) => ({ id: x.id, fraction: x.fraction! }))
+
+    const frame = (t: number) => {
+      const map = mapRef.current
+      if (!map || !s.playing) return
+      const dt = s.last ? Math.min(t - s.last, 100) : 16
+      s.last = t
+      if (s.hold > 0) {
+        s.hold -= dt
+      } else {
+        const prev = s.d / total
+        s.d = Math.min(total, s.d + (dt * s.speed * total) / REPLAY_MS)
+        const next = s.d / total
+        for (const stop of passed(marks('stop'), prev, next))
+          latest.current.onReach?.({ kind: 'stop', id: stop.id })
+        const shots = passed(marks('photo'), prev, next)
+        if (shots.length) {
+          latest.current.onReach?.({ kind: 'photo', id: shots[shots.length - 1].id })
+          s.hold = PHOTO_HOLD_MS
+        }
+      }
+      placeCamera(map, 1 - Math.exp(-dt / 650))
+      setLook(map, true)
+      emit()
+      if (s.d >= total) {
+        s.playing = false
+        emit(true)
+        // Back out to the whole route once the end is reached.
+        window.setTimeout(() => controller.exit(), 1200)
+        return
+      }
+      s.raf = requestAnimationFrame(frame)
+    }
+
+    const controller = {
+      play() {
+        const map = mapRef.current
+        if (!map || s.playing) return
+        // Pressed before the map finished loading: start as soon as it has.
+        if (!map.getLayer('route-line')) {
+          // Our overlays are added by the first 'style.load' handler, which runs before this.
+          map.once('style.load', () => controller.play())
+          return
+        }
+        if (s.d >= total - 1) s.d = 0
+        remember(map)
+        s.playing = true
+        s.last = 0
+        s.hold = 0
+        const pos = pointAlong(coords, cum, s.d)
+        s.bearing = bearingDeg(pos, pointAlong(coords, cum, s.d + ahead))
+        setLook(map, true)
+        emit(true)
+        // Swoop in from the overview, then start moving.
+        map.flyTo({ center: pos, zoom, pitch: FLY_PITCH, bearing: s.bearing, duration: 1600 })
+        map.once('moveend', () => {
+          if (s.playing) s.raf = requestAnimationFrame(frame)
+        })
+      },
+      pause() {
+        if (!s.playing) return
+        s.playing = false
+        cancelAnimationFrame(s.raf)
+        emit(true)
+      },
+      seek(fraction: number) {
+        const map = mapRef.current
+        if (!map) return
+        s.d = Math.max(0, Math.min(1, fraction)) * total
+        s.hold = 0
+        remember(map)
+        placeCamera(map, 1)
+        setLook(map, true)
+        emit(true)
+      },
+      setSpeed(speed: number) {
+        s.speed = speed
+      },
+      exit() {
+        const map = mapRef.current
+        s.playing = false
+        cancelAnimationFrame(s.raf)
+        s.d = 0
+        if (map) {
+          setLook(map, false)
+          if (s.saved) map.easeTo({ ...s.saved, duration: 1500 })
+        }
+        s.saved = null
+        s.reported = performance.now()
+        latest.current.onPlayback?.({ fraction: 0, playing: false, ended: true })
+      },
+      dispose() {
+        s.playing = false
+        cancelAnimationFrame(s.raf)
+      },
+    }
+    return controller
+  }, [track])
+  useEffect(() => () => fly.dispose(), [fly])
+  // Moving the map by hand pauses a replay, so people can look around.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    const userMove = (e: { originalEvent?: unknown }) => {
+      if (e.originalEvent) fly.pause()
+    }
+    const events = ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart'] as const
+    for (const ev of events) map.on(ev, userMove)
+    return () => {
+      for (const ev of events) map.off(ev, userMove)
+    }
+  }, [fly])
+  useImperativeHandle(controllerRef, () => fly, [fly])
 
   useEffect(() => {
     const map = mapRef.current
@@ -292,6 +611,73 @@ export default function TripMap({
       </div>
     </div>
   )
+}
+
+const THUMB_PX = 80 // drawn at 2× for sharp 40 px markers
+
+/** A photo as a round, white-ringed thumbnail for the map (null if it can't be drawn). */
+async function thumbImage(url: string): Promise<ImageData | null> {
+  try {
+    const img = new Image()
+    img.crossOrigin = 'anonymous' // the bucket allows GET from the app's origin (ADR-28)
+    img.src = url
+    await img.decode()
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = THUMB_PX
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    const r = THUMB_PX / 2
+    ctx.beginPath()
+    ctx.arc(r, r, r - 1, 0, 2 * Math.PI)
+    ctx.fillStyle = '#ffffff'
+    ctx.fill()
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(r, r, r - 7, 0, 2 * Math.PI)
+    ctx.clip()
+    const k = Math.max(THUMB_PX / img.width, THUMB_PX / img.height)
+    const w = img.width * k
+    const h = img.height * k
+    ctx.drawImage(img, (THUMB_PX - w) / 2, (THUMB_PX - h) / 2, w, h)
+    ctx.restore()
+    return ctx.getImageData(0, 0, THUMB_PX, THUMB_PX)
+  } catch {
+    return null // CORS or decode failure: the plain dot stays
+  }
+}
+
+/** Draw (or reuse) a thumbnail for every placed photo and register it with the map. */
+function addPhotoThumbs(map: MLMap, photos: Photo[], cache: Map<string, ImageData>) {
+  for (const p of photos) {
+    if (!p.location || !p.thumb_url) continue
+    const id = `thumb-${p.id}`
+    const put = (data: ImageData) => {
+      if (!map.getStyle()) return // map removed meanwhile
+      if (map.hasImage(id)) map.updateImage(id, data)
+      else map.addImage(id, data, { pixelRatio: 2 })
+    }
+    const cached = cache.get(p.id)
+    if (cached) {
+      put(cached)
+      continue
+    }
+    thumbImage(p.thumb_url).then((data) => {
+      if (!data) return
+      cache.set(p.id, data)
+      put(data)
+    })
+  }
+}
+
+function stopFeatures(stops: MapStop[]): FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: stops.map((s) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [s.lng, s.lat] },
+      properties: { id: s.id, label: s.label },
+    })),
+  }
 }
 
 function emptyCollection(): FeatureCollection {
@@ -374,32 +760,70 @@ function fitRouteToView(
   }
 }
 
+/**
+ * Relief shading lit from four directions (MapLibre's multidirectional method): ridges and
+ * valleys read clearly whichever way they face, unlike a single north-west light that
+ * flattens slopes facing it. Dark bases get light highlights, light bases soft navy shadows.
+ */
 function hillshadePaint(dark: boolean) {
-  // Dark bases need light highlights to show relief; light bases need soft shadows.
-  return dark
-    ? {
-        'hillshade-exaggeration': 0.45,
-        'hillshade-shadow-color': '#000000',
-        'hillshade-highlight-color': 'rgba(244,239,230,0.35)',
-        'hillshade-accent-color': '#000000',
-      }
-    : {
-        'hillshade-exaggeration': 0.2,
-        'hillshade-shadow-color': '#0b1210',
-        'hillshade-highlight-color': 'rgba(255,255,255,0)',
-      }
+  const four = <T,>(v: T) => [v, v, v, v]
+  return {
+    'hillshade-method': 'multidirectional' as const,
+    'hillshade-illumination-direction': [270, 315, 0, 45],
+    'hillshade-illumination-altitude': [35, 35, 35, 35],
+    'hillshade-exaggeration': dark ? 0.5 : 0.7,
+    'hillshade-highlight-color': four(dark ? 'rgba(255,248,235,0.22)' : 'rgba(255,255,255,0.2)'),
+    // Warm brown shadows, deepest from the west: they read as earth, not as grey haze.
+    'hillshade-shadow-color': dark
+      ? four('rgba(0,0,0,0.42)')
+      : ['rgba(40,30,20,0.5)', 'rgba(40,30,20,0.38)', 'rgba(40,30,20,0.26)', 'rgba(40,30,20,0.38)'],
+  }
 }
 
-function addOverlays(map: MLMap, track: TrackData, darkBase: boolean) {
+/** First layer that should sit above the relief: water, roads, labels. */
+function reliefAnchor(map: MLMap): string | undefined {
+  return map
+    .getStyle()
+    .layers.find((l) => l.id === 'water' || l.type === 'line' || l.type === 'symbol')?.id
+}
+
+function addOverlays(map: MLMap, track: TrackData, styleId: BaseStyleId) {
   if (!map.getSource('terrain')) map.addSource('terrain', TERRAIN_SOURCE)
   map.setTerrain({ source: 'terrain', exaggeration: TERRAIN_EXAGGERATION })
+  const below = reliefAnchor(map)
+  // Terrain style: land tinted by height (green valleys, tan slopes, rock, snow).
+  if (hasRelief(styleId) && !map.getLayer('relief')) {
+    map.addLayer(
+      {
+        id: 'relief',
+        type: 'color-relief',
+        source: 'terrain',
+        paint: {
+          'color-relief-opacity': 0.9,
+          'color-relief-color': [
+            'interpolate',
+            ['linear'],
+            ['elevation'],
+            ...RELIEF_RAMP,
+          ] as ExpressionSpecification,
+        },
+      },
+      below,
+    )
+  }
+  // The base style paints glaciers flat white above the tint; let the relief show through.
+  if (hasRelief(styleId) && map.getLayer('landcover_glacier'))
+    map.setPaintProperty('landcover_glacier', 'fill-opacity', 0.55)
   if (!map.getLayer('hillshade')) {
-    map.addLayer({
-      id: 'hillshade',
-      type: 'hillshade',
-      source: 'terrain',
-      paint: hillshadePaint(darkBase),
-    })
+    map.addLayer(
+      {
+        id: 'hillshade',
+        type: 'hillshade',
+        source: 'terrain',
+        paint: hillshadePaint(isDarkStyle(styleId)),
+      },
+      below,
+    )
   }
   map.setSky?.({
     'sky-color': '#d6e2f3',
@@ -410,7 +834,16 @@ function addOverlays(map: MLMap, track: TrackData, darkBase: boolean) {
   const coords = track.geometry.coordinates
   map.addSource('route', {
     type: 'geojson',
+    lineMetrics: true, // needed for the start-to-finish colour gradient
     data: { type: 'Feature', geometry: track.geometry, properties: {} },
+  })
+  // A soft glow under the route so it reads on busy terrain and satellite imagery.
+  map.addLayer({
+    id: 'route-glow',
+    type: 'line',
+    source: 'route',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: { 'line-color': ROUTE_COLOR, 'line-width': 18, 'line-blur': 12, 'line-opacity': 0.28 },
   })
   map.addLayer({
     id: 'route-casing',
@@ -424,7 +857,7 @@ function addOverlays(map: MLMap, track: TrackData, darkBase: boolean) {
     type: 'line',
     source: 'route',
     layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint: { 'line-color': ROUTE_COLOR, 'line-width': 4 },
+    paint: { 'line-width': 4.5, 'line-gradient': IDLE_GRADIENT },
   })
   // Wide invisible line so the route is easy to hover on touch and mouse.
   map.addLayer({
@@ -453,13 +886,28 @@ function addOverlays(map: MLMap, track: TrackData, darkBase: boolean) {
     },
   })
 
+  // Story stops: a pin each, labelled once there's room (labels are added after photos).
+  map.addSource('stops', { type: 'geojson', data: emptyCollection() })
+  map.addLayer({
+    id: 'stop-pins',
+    type: 'circle',
+    source: 'stops',
+    paint: {
+      'circle-radius': 7,
+      'circle-color': PALETTE.ink,
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 3,
+    },
+  })
+
   // Photo markers cluster when zoomed out (SPEC F6); data is set by the caller.
   map.addSource('photos', {
     type: 'geojson',
     data: emptyCollection(),
     cluster: true,
-    clusterRadius: 36,
-    clusterMaxZoom: 15,
+    // Small radius: photos show as thumbnails at normal zoom and only merge when truly crowded.
+    clusterRadius: 22,
+    clusterMaxZoom: 13,
   })
   map.addLayer({
     id: 'photo-clusters',
@@ -498,6 +946,34 @@ function addOverlays(map: MLMap, track: TrackData, darkBase: boolean) {
       'circle-stroke-width': 3,
     },
   })
+  // Each photo as a round thumbnail over its dot (the dot shows until the image is drawn).
+  map.addLayer({
+    id: 'photo-thumbs',
+    type: 'symbol',
+    source: 'photos',
+    filter: ['!', ['has', 'point_count']],
+    layout: {
+      'icon-image': ['concat', 'thumb-', ['get', 'id']],
+      'icon-size': ['interpolate', ['linear'], ['zoom'], 9, 0.75, 15, 1.1],
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+    },
+    paint: { 'icon-opacity': ['case', ['get', 'hidden'], 0.5, 1] },
+  })
+  map.addLayer({
+    id: 'stop-labels',
+    type: 'symbol',
+    source: 'stops',
+    layout: {
+      'text-field': ['get', 'label'],
+      'text-font': labelFont(map),
+      'text-size': 13,
+      'text-anchor': 'bottom',
+      'text-offset': [0, -0.9],
+      'text-max-width': 12,
+    },
+    paint: { 'text-color': PALETTE.ink, 'text-halo-color': '#ffffff', 'text-halo-width': 2 },
+  })
 
   map.addSource('cursor', { type: 'geojson', data: emptyCollection() })
   map.addLayer({
@@ -509,6 +985,26 @@ function addOverlays(map: MLMap, track: TrackData, darkBase: boolean) {
       'circle-color': '#ffffff',
       'circle-stroke-color': ROUTE_COLOR,
       'circle-stroke-width': 3,
+    },
+  })
+
+  // The replay's traveller: a raspberry dot with a halo, moved every frame.
+  map.addSource('traveller', { type: 'geojson', data: emptyCollection() })
+  map.addLayer({
+    id: 'traveller-halo',
+    type: 'circle',
+    source: 'traveller',
+    paint: { 'circle-radius': 20, 'circle-color': ROUTE_COLOR, 'circle-opacity': 0.22 },
+  })
+  map.addLayer({
+    id: 'traveller',
+    type: 'circle',
+    source: 'traveller',
+    paint: {
+      'circle-radius': 8,
+      'circle-color': ROUTE_COLOR,
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 4,
     },
   })
 }

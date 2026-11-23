@@ -129,3 +129,49 @@ export interface HighlightInput {
   body: string
   photo_ids: string[]
 }
+
+/** What a share page receives (GET /api/public/u/<user>/<slug>): privacy-trimmed, no EXIF. */
+export interface PublicTrip {
+  trip: {
+    id: string
+    title: string
+    slug: string
+    description: string
+    visibility: Visibility
+    owner: { username: string; display_name: string }
+    start_date: string | null
+    end_date: string | null
+    timezone: string
+    stats: Partial<TripStats>
+    privacy_zone_m: number
+    cover_url: string | null
+  }
+  /** Null when the route is shorter than both privacy zones together. */
+  track: TrackData | null
+  photos: PublicPhoto[]
+  highlights: Highlight[]
+}
+
+export type PublicPhoto = Pick<
+  Photo,
+  | 'id'
+  | 'thumb_url'
+  | 'web_url'
+  | 'width'
+  | 'height'
+  | 'caption'
+  | 'taken_at'
+  | 'location'
+  | 'route_fraction'
+  | 'highlight'
+>
+
+/** Lifetime numbers across a user's ready trips (GET /api/trips/totals). */
+export interface Totals {
+  trips: number
+  distance_m: number
+  gain_m: number
+  highest_m: number | null
+  days: number
+  photos: number
+}

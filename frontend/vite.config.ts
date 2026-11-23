@@ -17,6 +17,7 @@ export default defineConfig({
       '/_allauth': backend,
       '/admin': backend,
       '/static': backend,
+      '/og': backend,
     },
   },
   // MapLibre v6 loads its web worker relative to its own module URL. Pre-bundling moves the

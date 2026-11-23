@@ -9,7 +9,7 @@ import { btn, field } from '../components/ui'
 import { ApiError, api } from '../lib/api'
 import { formatDateRange, formatDistance, formatDuration, formatElevation } from '../lib/format'
 import { isHilly } from '../lib/stats'
-import type { Page, Trip } from '../lib/types'
+import type { Page, Totals, Trip } from '../lib/types'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 
 const STATUS: Record<Trip['status'], { label: string; className: string }> = {
@@ -56,6 +56,10 @@ export default function Trips() {
         : ''
 
   const trips = data?.results ?? []
+  const totals = useQuery({
+    queryKey: ['trips', 'totals'],
+    queryFn: () => api.get<Totals>('/api/trips/totals'),
+  }).data
 
   return (
     <>
@@ -64,11 +68,15 @@ export default function Trips() {
           <div className="flex flex-wrap items-end justify-between gap-6">
             <div>
               <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl">My trips</h1>
-              <p className="mt-1 text-muted">
-                {trips.length
-                  ? `${trips.length} ${trips.length === 1 ? 'trip' : 'trips'} so far.`
-                  : 'Your trips will appear here.'}
-              </p>
+              {totals && totals.trips > 0 ? (
+                <TotalsRow totals={totals} />
+              ) : (
+                <p className="mt-1 text-muted">
+                  {trips.length
+                    ? 'Your trips are being processed.'
+                    : 'Your trips will appear here.'}
+                </p>
+              )}
             </div>
             <form onSubmit={submit} className="w-full sm:w-auto">
               <div className="flex gap-2">
@@ -207,5 +215,38 @@ export default function Trips() {
         )}
       </div>
     </>
+  )
+}
+
+/** Lifetime numbers, the way travel trackers sum up everywhere you've been. */
+function TotalsRow({ totals }: { totals: Totals }) {
+  const items = [
+    { label: totals.trips === 1 ? 'trip' : 'trips', value: totals.trips.toLocaleString('en-IN') },
+    { label: 'travelled', value: formatDistance(totals.distance_m) },
+    {
+      label: totals.days === 1 ? 'day out' : 'days out',
+      value: String(totals.days),
+      show: totals.days > 0,
+    },
+    { label: 'photos', value: totals.photos.toLocaleString('en-IN'), show: totals.photos > 0 },
+    {
+      label: 'highest point',
+      value: formatElevation(totals.highest_m),
+      show: (totals.highest_m ?? 0) >= 500,
+    },
+  ]
+  return (
+    <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-3">
+      {items
+        .filter((i) => i.show !== false)
+        .map(({ label, value }) => (
+          <div key={label} className="flex flex-col-reverse">
+            <dt className="text-sm text-muted">{label}</dt>
+            <dd className="text-2xl font-extrabold tracking-[-0.03em] text-brand tabular-nums">
+              {value}
+            </dd>
+          </div>
+        ))}
+    </dl>
   )
 }
