@@ -119,11 +119,15 @@ CSRF_COOKIE_SECURE = not DEBUG
 
 # --- django-allauth (headless, email + password; Google comes in v1.0.1) ---
 HEADLESS_ONLY = True
+# Where the site is served. Links in emails are built from this, not from the request's host:
+# in dev the Vite proxy rewrites Host to the backend's port, which would 404 (ADR-37).
+FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173").rstrip("/")
 HEADLESS_FRONTEND_URLS = {
-    "account_confirm_email": "/account/verify-email/{key}",
-    "account_reset_password_from_key": "/account/password/reset/{key}",
-    "account_signup": "/signup",
+    "account_confirm_email": f"{FRONTEND_URL}/account/verify-email/{{key}}",
+    "account_reset_password_from_key": f"{FRONTEND_URL}/account/password/reset/{{key}}",
+    "account_signup": f"{FRONTEND_URL}/signup",
 }
+ACCOUNT_EMAIL_SUBJECT_PREFIX = "TrailLog: "
 ACCOUNT_LOGIN_METHODS = {"email"}
 ACCOUNT_SIGNUP_FIELDS = ["email*", "username*", "password1*"]
 ACCOUNT_UNIQUE_EMAIL = True
@@ -142,7 +146,12 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "config.pagination.CreatedAtCursorPagination",
     "PAGE_SIZE": 20,
     "EXCEPTION_HANDLER": "config.exceptions.api_exception_handler",
-    "DEFAULT_THROTTLE_RATES": {"upload": "20/min", "presign": "20/min", "public": "120/min"},
+    "DEFAULT_THROTTLE_RATES": {
+        "upload": "20/min",
+        "presign": "20/min",
+        "public": "120/min",
+        "account_delete": "5/min",
+    },
 }
 
 # Built SPA shell that share pages fill with link-preview meta tags (ADR-12). In development

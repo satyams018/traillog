@@ -19,7 +19,37 @@ interface Props {
   submitLabel: string
   busyLabel: string
   onSubmit: (values: Record<string, string>) => Promise<void>
-  footer: ReactNode
+  footer?: ReactNode
+  /** A friendly message above the form, e.g. "Password changed. Log in again." */
+  notice?: ReactNode
+  /** Shown between the last field and the submit button (e.g. "Forgot password?"). */
+  afterFields?: ReactNode
+}
+
+/** The card every signed-out page sits in: contour texture, logo, title. */
+export function AuthCard({
+  title,
+  subtitle,
+  children,
+  footer,
+}: {
+  title: string
+  subtitle: ReactNode
+  children?: ReactNode
+  footer?: ReactNode
+}) {
+  return (
+    <div className="contours-hero relative min-h-[calc(100vh-4rem)] px-4 py-12 sm:py-20">
+      <div className="absolute inset-0 bg-paper/75" aria-hidden />
+      <div className="relative mx-auto max-w-md rounded-3xl border border-line bg-card p-7 shadow-[var(--shadow-lift)] sm:p-9">
+        <Logo />
+        <h1 className="mt-6 text-3xl font-extrabold tracking-tight">{title}</h1>
+        <p className="mt-1.5 text-muted">{subtitle}</p>
+        {children}
+        {footer && <p className="mt-6 text-sm text-muted">{footer}</p>}
+      </div>
+    </div>
+  )
 }
 
 export default function AuthForm({
@@ -30,6 +60,8 @@ export default function AuthForm({
   busyLabel,
   onSubmit,
   footer,
+  notice,
+  afterFields,
 }: Props) {
   const [error, setError] = useState<ApiError | null>(null)
   const [busy, setBusy] = useState(false)
@@ -52,48 +84,48 @@ export default function AuthForm({
   }
 
   return (
-    <div className="contours-hero relative min-h-[calc(100vh-4rem)] px-4 py-12 sm:py-20">
-      <div className="absolute inset-0 bg-paper/75" aria-hidden />
-      <div className="relative mx-auto max-w-md rounded-3xl border border-line bg-card p-7 shadow-[var(--shadow-lift)] sm:p-9">
-        <Logo />
-        <h1 className="mt-6 text-3xl font-extrabold tracking-tight">{title}</h1>
-        <p className="mt-1.5 text-muted">{subtitle}</p>
-        <form onSubmit={handle} className="mt-7 space-y-5" noValidate>
-          {fields.map((f) => {
-            const errors = error?.fields?.[f.name]
-            return (
-              <label key={f.name} className="block">
-                <span className="text-sm font-semibold">{f.label}</span>
-                <input
-                  name={f.name}
-                  type={f.type}
-                  autoComplete={f.autoComplete}
-                  required
-                  aria-invalid={!!errors}
-                  className={`${field} mt-1.5 ${errors ? 'border-danger' : ''}`}
-                />
-                {errors?.map((m) => (
-                  <span key={m} className="mt-1.5 block text-sm text-danger">
-                    {m}
-                  </span>
-                ))}
-                {f.hint && !errors && (
-                  <span className="mt-1.5 block text-sm text-muted">{f.hint}</span>
-                )}
-              </label>
-            )
-          })}
-          {error && !Object.keys(error.fields ?? {}).length && (
-            <p role="alert" className="rounded-xl bg-danger/10 px-3 py-2 text-sm text-danger">
-              {error.message}
-            </p>
-          )}
-          <button disabled={busy} className={`${btn.primary} w-full py-3 text-base`}>
-            {busy ? busyLabel : submitLabel}
-          </button>
-        </form>
-        <p className="mt-6 text-sm text-muted">{footer}</p>
-      </div>
-    </div>
+    <AuthCard title={title} subtitle={subtitle} footer={footer}>
+      {notice && (
+        <p role="status" className="mt-6 rounded-xl bg-wash px-3.5 py-2.5 text-sm text-ink">
+          {notice}
+        </p>
+      )}
+      <form onSubmit={handle} className="mt-7 space-y-5" noValidate>
+        {fields.map((f) => {
+          const errors = error?.fields?.[f.name]
+          return (
+            <label key={f.name} className="block">
+              <span className="text-sm font-semibold">{f.label}</span>
+              <input
+                name={f.name}
+                type={f.type}
+                autoComplete={f.autoComplete}
+                required
+                aria-invalid={!!errors}
+                className={`${field} mt-1.5 ${errors ? 'border-danger' : ''}`}
+              />
+              {errors?.map((m) => (
+                <span key={m} className="mt-1.5 block text-sm text-danger">
+                  {m}
+                </span>
+              ))}
+              {f.hint && !errors && (
+                <span className="mt-1.5 block text-sm text-muted">{f.hint}</span>
+              )}
+            </label>
+          )
+        })}
+        {afterFields}
+        {/* Errors on a field we don't show (e.g. an expired reset key) go here too. */}
+        {error && !fields.some((f) => error.fields?.[f.name]) && (
+          <p role="alert" className="rounded-xl bg-danger/10 px-3 py-2 text-sm text-danger">
+            {error.message}
+          </p>
+        )}
+        <button disabled={busy} className={`${btn.primary} w-full py-3 text-base`}>
+          {busy ? busyLabel : submitLabel}
+        </button>
+      </form>
+    </AuthCard>
   )
 }

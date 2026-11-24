@@ -8,7 +8,8 @@ export default function Login() {
   useDocumentTitle('Log in')
   const { login } = useAuthActions()
   const navigate = useNavigate()
-  const from = (useLocation().state as { from?: string } | null)?.from ?? '/trips'
+  const state = useLocation().state as { from?: string; notice?: string } | null
+  const from = state?.from ?? '/trips'
   return (
     <AuthForm
       title="Welcome back"
@@ -19,6 +20,15 @@ export default function Login() {
         { name: 'email', label: 'Email', type: 'email', autoComplete: 'email' },
         { name: 'password', label: 'Password', type: 'password', autoComplete: 'current-password' },
       ]}
+      notice={state?.notice}
+      afterFields={
+        <Link
+          to="/account/password/reset"
+          className="-mt-2 block text-right text-sm font-semibold text-brand underline-offset-2 hover:underline"
+        >
+          Forgot password?
+        </Link>
+      }
       onSubmit={async (v) => {
         await login(v.email, v.password)
         navigate(from, { replace: true })

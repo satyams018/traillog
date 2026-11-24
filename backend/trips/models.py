@@ -64,6 +64,13 @@ class Trip(models.Model):
     def __str__(self):
         return f"{self.owner} / {self.slug}"
 
+    @property
+    def object_keys(self) -> list[str]:
+        """Storage objects to delete with the trip: its photos' files and the GPX file."""
+        keys = [k for p in self.photos.all() for k in p.object_keys]
+        gpx_key = getattr(getattr(self, "track", None), "gpx_key", None)
+        return [*keys, gpx_key] if gpx_key else keys
+
 
 class Track(models.Model):
     """The GPS track of a trip. Full geometry for stats, simplified for display (ADR-9)."""

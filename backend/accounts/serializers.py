@@ -16,3 +16,7 @@ class MeSerializer(serializers.ModelSerializer):
         ]
         # Username changes would break existing share links, so it is fixed after signup.
         read_only_fields = ["id", "username", "email", "storage_used_bytes", "storage_quota_bytes"]
+
+
+class DeleteAccountSerializer(serializers.Serializer):
+    password = serializers.CharField(trim_whitespace=False)

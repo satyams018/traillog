@@ -31,13 +31,20 @@ export default function Layout() {
           <div className="ml-auto flex items-center gap-2 text-sm">
             {user ? (
               <>
-                <span
-                  className="hidden h-8 w-8 items-center justify-center rounded-full bg-route/15 font-bold text-route-dark sm:flex"
+                <NavLink
+                  to="/settings"
+                  className={({ isActive }) =>
+                    `flex h-8 w-8 items-center justify-center rounded-full font-bold text-route-dark ${
+                      isActive
+                        ? 'bg-route/30 ring-2 ring-route/40'
+                        : 'bg-route/15 hover:bg-route/25'
+                    }`
+                  }
                   title={`Signed in as @${user.username}`}
-                  aria-hidden
+                  aria-label="Account settings"
                 >
                   {user.username.slice(0, 1).toUpperCase()}
-                </span>
+                </NavLink>
                 <button
                   className={`${btn.ghost} whitespace-nowrap`}
                   aria-label="Log out"
