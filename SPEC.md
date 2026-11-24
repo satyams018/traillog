@@ -33,7 +33,7 @@ TrailLog turns a trek or trip into a story you can share. Upload a GPX track and
 
 | # | Feature | Acceptance criteria |
 |---|---|---|
-| F1 | **Auth** | Sign up and log in with email/password (with email verification; emails go to the console in dev). Google sign-in moves to v1.0.1, but allauth makes it a config change, not new code. Sessions use httpOnly cookies (ADR-3). Users can access only their own trips. |
+| F1 | **Auth** | Sign up and log in with email/password (with email verification; emails go to the console in dev). Google sign-in moves to v1.0.1, but allauth makes it a config change, not new code. Sessions use httpOnly cookies (ADR-3). Users can access only their own trips. Forgot/reset password, confirming the email (with resend), a settings page (display name, change password) and deleting the account with all its trips and files (ADR-37). |
 | F2 | **GPX upload & processing** | Upload a `.gpx` file up to 20 MB. A background job parses tracks, segments and waypoints and computes stats (§6.1). The trip shows `processing`, then `ready` or `failed` with a readable error. |
 | F3 | **Photo upload** | Upload up to 300 JPEG/HEIC photos (25 MB each) per trip, straight to storage via presigned PUT (ADR-4), with a per-file progress bar. Thumbnails and web-size versions are made in the background, and then the **uploaded original is deleted**: originals stay on the user's own phone or drive (ADR-21). Each user has a **1 GB quota** for stored copies, shown as a usage bar. Uploads over quota are refused before they start. |
 | F4 | **Photo placement** | Placement uses EXIF GPS first, then time-matching to the track, then manual placement (§6.3). The owner can set a camera-clock offset with live preview. Changing it re-runs the matching. Unplaced photos appear in a tray and can be dropped onto the map or the chart. |
@@ -198,6 +198,7 @@ All under `/api/`, JSON, session auth + CSRF. Errors use the shape `{"error": {"
 | Method | Path | Purpose |
 |---|---|---|
 | GET / PATCH | `/api/me` | Profile (username, display name) |
+| DELETE | `/api/me` | Body `{password}`: delete the account, its trips and every stored file, and log out (5/min; ADR-37) |
 | GET / POST | `/api/trips` | List my trips / create a draft |
 | GET / PATCH / DELETE | `/api/trips/{id}` | Detail; edit title, description, cover, visibility, privacy_zone_m, camera_offset_s. Changing the offset → `match_photos`; changing the zone → `build_public_track` |
 | POST | `/api/trips/{id}/gpx` | Multipart GPX upload → `202`, `status=processing` (ADR-5) |
@@ -221,7 +222,7 @@ All under `/api/`, JSON, session auth + CSRF. Errors use the shape `{"error": {"
 
 ## 10. Frontend
 
-**Routes:** `/` landing (a demo trip playing the flythrough as the hero) · `/login` · `/signup` · `/trips` my trips · `/trips/new` upload wizard (GPX → photos → offset check) · `/trips/:id/edit` editor · `/u/:user/:slug` story · `/u/:user` profile (v1.1) · `/explore` (v1.2).
+**Routes:** `/` landing (a demo trip playing the flythrough as the hero) · `/login` · `/signup` · `/account/password/reset[/:key]` and `/account/verify-email/:key` (the links allauth emails) · `/settings` account settings · `/trips` my trips · `/trips/new` upload wizard (GPX → photos → offset check) · `/trips/:id/edit` editor · `/u/:user/:slug` story · `/u/:user` profile (v1.1) · `/explore` (v1.2).
 
 **Look & feel: a travel journal on a map** (revised 2026-11-23 so the site suits any trip, not only treks; ADR-33, replacing the outdoorsy palette of ADR-27)
 - **Palette:** cool map-paper `#F4F6F9` background, white cards, atlas blue `#2449C8` for actions, links and the route's start, highlighter raspberry `#E33A6E` for the route, your place on it and progress (`#A9184B` for raspberry text), ink `#131C2E` / muted `#556074` text, wash `#E7EDF6` for tinted surfaces. Every text pair passes WCAG AA. Map and chart colours come from `lib/palette.ts`.

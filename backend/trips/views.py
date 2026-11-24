@@ -105,10 +105,7 @@ class TripViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def perform_destroy(self, instance):
-        keys = [k for p in instance.photos.all() for k in p.object_keys]
-        gpx_key = getattr(getattr(instance, "track", None), "gpx_key", None)
-        if gpx_key:
-            keys.append(gpx_key)
+        keys = instance.object_keys
         freed = instance.photos.aggregate(total=Sum("stored_bytes"))["total"] or 0
         instance.delete()
         _quota_add(instance.owner_id, -freed)

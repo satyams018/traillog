@@ -256,3 +256,29 @@ A short log of key choices: what was decided, what else was considered, and the 
   - A commercial deployment needs an EOX licence or a MapTiler key (set `VITE_MAPTILER_KEY`).
   - Positron's own land fills are pale, so the tint shows through; on Topo and Dark only the shading changes.
 
+## ADR-37: Account self-service on allauth's headless API
+- **Decision:** the SPA gets pages for:
+  - forgot password (`/account/password/reset`)
+  - choose a new password (`/account/password/reset/:key`)
+  - confirm email (`/account/verify-email/:key`)
+  - account settings (`/settings`: display name, email status with resend, change password, storage, delete account)
+
+  The paths are the ones allauth already puts in its emails. The reset and email steps call allauth's headless endpoints directly. Deleting an account is our own `DELETE /api/me`: it asks for the password again, is limited to 5 tries a minute, logs out, deletes the user (trips, tracks, photos and stops go by CASCADE), and queues deletion of every stored file once the transaction commits. Email links are built from a `FRONTEND_URL` setting, not from the request's host.
+- **Alternatives:**
+  - allauth's own server-rendered account pages (a second look and feel, and they need the non-headless app).
+  - Deleting accounts in an admin-only flow (users would have to email us).
+  - Soft delete with a grace period.
+  - Confirming the email automatically when the link opens.
+- **Why:**
+  - Without a reset page a forgotten password locks the user out for good.
+  - A public site that stores people's photos and tracks should let them leave and take their data with them.
+  - Reusing allauth keeps tokens, expiry, rate limits and the "don't reveal who has an account" behaviour in a well-tested library.
+  - Confirming takes a click because mail scanners open links in emails and would otherwise confirm addresses nobody checked.
+  - `FRONTEND_URL` is needed because the Vite dev proxy rewrites the Host header to the backend's port, and in production the API and the site could sit on different hosts.
+- **Tradeoff:**
+  - Deletion is immediate and final; there's no undo window. Files are removed by a retrying Celery job, so a storage outage delays it but doesn't stop it.
+  - Old share-preview images (`og/…`) aren't deleted with the account yet; the same gap exists for trip deletion.
+  - Email verification stays `optional` until a real email provider is set up for production; then it can become `mandatory`.
+  - Changing the email address isn't offered yet. allauth supports it, but it needs a re-verification flow in the UI.
+  - allauth's default email wording ("Hello from localhost:8000!") still needs TrailLog templates before launch.
+

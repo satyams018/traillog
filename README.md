@@ -12,6 +12,8 @@ camera fly along the route as your photos and stops pop up.
 
 ## Features
 - Email/password accounts (django-allauth, headless) with same-origin session cookies
+- Account self-service: forgot/reset password, email confirmation (with resend), a settings
+  page for display name and password, and deleting the account with all its trips and files
 - Trips: create, rename, delete, visibility (private / link / public)
 - GPX upload, processed in a Celery background job:
   - haversine distance that ignores gaps between segments
@@ -93,6 +95,10 @@ npm run dev                                # http://localhost:5173
 ```
 
 Stop everything when done: `docker-compose stop && colima stop`.
+
+In development, emails (confirm your email, reset your password) are printed in the
+`runserver` terminal instead of being sent. Their links point at `FRONTEND_URL`
+(`http://localhost:5173` by default).
 
 A synthetic 2-day demo trek for testing is in `samples/demo-trek.gpx` (regenerate with
 `uv run --no-project --python 3.12 samples/make_demo_gpx.py > samples/demo-trek.gpx`).
